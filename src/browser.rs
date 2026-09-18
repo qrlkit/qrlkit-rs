@@ -113,9 +113,11 @@ pub fn choose() -> Result<Browser> {
 }
 
 pub fn open(browser: &Browser, url: &str) -> Result<()> {
-    crate::import::validate_url(url)?;
+    crate::resource::validate_url(url)?;
     // macOS uses Launch Services to address an already running app correctly.
     let mut command = if cfg!(target_os = "macos")
+        // Internal schemes are browser arguments, not OS URL handlers.
+        && !crate::resource::is_browser_url(url)
         && browser
             .executable
             .ancestors()

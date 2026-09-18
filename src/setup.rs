@@ -3,6 +3,7 @@ use crate::{
     store::State,
 };
 use anyhow::{Context, Result, bail, ensure};
+use clap::ValueEnum;
 use std::{
     fs,
     io::Write,
@@ -177,7 +178,7 @@ pub fn for_directories(state: &State) -> Result<()> {
     if !has_directory {
         return Ok(());
     }
-    let shell = detect()?;
+    let shell = state.shell.clone().map(Ok).unwrap_or_else(detect)?;
     let path = startup(&shell)?;
     let changed = install(&path, shell)?;
     eprintln!(
@@ -192,12 +193,74 @@ pub fn for_directories(state: &State) -> Result<()> {
     Ok(())
 }
 
+/// Configure preferences only after all prompts have completed successfully.
+pub fn interactive(state: &mut State, config: &Path) -> Result<()> {
+    let browser = crate::browser::choose()?;
+    let default_shell = detect().unwrap_or(if cfg!(windows) {
+        Shell::Powershell
+    } else {
+        Shell::Bash
+    });
+    let title = format!(
+        "Choose shell: bash, zsh, fish, powershell (empty for {})",
+        default_shell.to_possible_value().unwrap().get_name()
+    );
+    let mut prompt = title.clone();
+    let shell = loop {
+        let value = crate::ui::input_optional(&prompt)?;
+        if value.is_empty() {
+            break default_shell;
+        }
+        match Shell::from_str(&value, true) {
+            Ok(shell) => break shell,
+            Err(_) => prompt = format!("Unsupported shell. {title}"),
+        }
+    };
+    let filehook = choose_hook(
+        "Filehook command (use file, e.g. nvim file; empty to print path)",
+        crate::filehook::validate,
+    )?;
+    let dirhook = choose_hook(
+        "Dirhook command (use dir, e.g. cd dir; empty to change directory)",
+        crate::dirhook::validate,
+    )?;
+    let startup_path = startup(&shell)?;
+    state.browser = Some(browser);
+    state.shell = Some(shell.clone());
+    state.filehook = filehook;
+    state.dirhook = dirhook;
+    state.save(config)?;
+    install(&startup_path, shell)
+        .context("Preferences saved, but shell integration failed; run qrlkit init to retry")?;
+    for_aliases(state, config)
+        .context("Preferences saved, but alias setup failed; run qrlkit init to retry")?;
+    println!(
+        "QRL configured. Shell integration installed in {}. Open a new terminal to activate it.",
+        startup_path.display()
+    );
+    Ok(())
+}
+
+fn choose_hook(title: &str, validate: impl Fn(&str) -> Result<()>) -> Result<Option<String>> {
+    let mut prompt = title.to_owned();
+    loop {
+        let value = crate::ui::input_optional(&prompt)?;
+        if value.is_empty() {
+            return Ok(None);
+        }
+        match validate(&value) {
+            Ok(()) => return Ok(Some(value)),
+            Err(error) => prompt = format!("{error}. {title}"),
+        }
+    }
+}
+
 /// Load aliases from live state on each new shell, so removals need no stale functions.
 pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
     if state.sources.is_empty() {
         return Ok(());
     }
-    let shell = detect()?;
+    let shell = state.shell.clone().map(Ok).unwrap_or_else(detect)?;
     let path = startup(&shell)?;
     let config = crate::alias::quote(&std::path::absolute(config)?.to_string_lossy(), &shell);
     let loader = match shell {

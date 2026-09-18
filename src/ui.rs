@@ -32,7 +32,13 @@ impl Drop for Restore {
     }
 }
 
-fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) -> Result<String> {
+fn render_prompt(
+    title: &str,
+    options: &[String],
+    input: bool,
+    minimal: bool,
+    allow_empty: bool,
+) -> Result<String> {
     ensure!(
         io::stdin().is_terminal() && io::stderr().is_terminal(),
         "{title}: an interactive terminal is required"
@@ -77,7 +83,14 @@ fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) ->
                 }
             }
             if !minimal {
-                lines.push("↑/↓ or j/k select · Enter confirm · Esc cancel".into());
+                lines.push(
+                    if input {
+                        "Enter confirm · Esc cancel"
+                    } else {
+                        "↑/↓ or j/k select · Enter confirm · Esc cancel"
+                    }
+                    .into(),
+                );
             }
             frame.render_widget(Paragraph::new(lines.join("\n")), frame.area());
         })?;
@@ -88,7 +101,7 @@ fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) ->
             match key.code {
                 KeyCode::Esc => break None,
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break None,
-                KeyCode::Enter if input && !text.trim().is_empty() => {
+                KeyCode::Enter if input && (allow_empty || !text.trim().is_empty()) => {
                     break Some(text.trim().into());
                 }
                 KeyCode::Enter if !input => break Some(selected.to_string()),
@@ -118,11 +131,19 @@ struct PromptRequest {
     options: Vec<String>,
     input: bool,
     minimal: bool,
+    #[serde(default)]
+    allow_empty: bool,
 }
 
 // Crossterm sends cursor queries to stdout. Isolate the prompt in a child whose
 // stdout and stderr both point at the terminal, preserving the parent's stdout.
-fn prompt(title: &str, options: &[String], input: bool, minimal: bool) -> Result<String> {
+fn prompt(
+    title: &str,
+    options: &[String],
+    input: bool,
+    minimal: bool,
+    allow_empty: bool,
+) -> Result<String> {
     ensure!(
         io::stdin().is_terminal() && io::stderr().is_terminal(),
         "{title}: an interactive terminal is required"
@@ -134,6 +155,7 @@ fn prompt(title: &str, options: &[String], input: bool, minimal: bool) -> Result
         options: options.to_vec(),
         input,
         minimal,
+        allow_empty,
     };
     std::fs::write(request.path(), serde_yaml_ng::to_string(&data)?)?;
     let status = std::process::Command::new(std::env::current_exe()?)
@@ -154,23 +176,34 @@ pub fn run_prompt(request: &std::path::Path, response: &std::path::Path) -> Resu
         data.input || !data.options.is_empty(),
         "No options available"
     );
-    let result = render_prompt(&data.title, &data.options, data.input, data.minimal)
-        .map_err(|error| error.to_string());
+    let result = render_prompt(
+        &data.title,
+        &data.options,
+        data.input,
+        data.minimal,
+        data.allow_empty,
+    )
+    .map_err(|error| error.to_string());
     std::fs::write(response, serde_yaml_ng::to_string(&result)?)?;
     Ok(())
 }
 
 pub fn select(title: &str, options: &[String]) -> Result<usize> {
     ensure!(!options.is_empty(), "No options available");
-    Ok(prompt(title, options, false, false)?.parse()?)
+    Ok(prompt(title, options, false, false, false)?.parse()?)
 }
 
 pub fn input(title: &str) -> Result<String> {
-    prompt(title, &[], true, false)
+    prompt(title, &[], true, false, false)
+}
+
+/// Input where pressing Enter accepts the caller's default.
+pub fn input_optional(title: &str) -> Result<String> {
+    prompt(title, &[], true, false, true)
 }
 
 /// Resource navigation only: keys and a selection marker, sized to the list.
 pub fn select_key(options: &[String]) -> Result<usize> {
     ensure!(!options.is_empty(), "No keys available");
-    Ok(prompt("Resource selection", options, false, true)?.parse()?)
+    Ok(prompt("Resource selection", options, false, true, false)?.parse()?)
 }

@@ -56,15 +56,6 @@ pub fn valid_segment(key: &str) -> bool {
         && !key.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-pub fn validate_url(value: &str) -> Result<()> {
-    let url = url::Url::parse(value).context("Invalid URL")?;
-    ensure!(
-        matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
-        "Expected an absolute HTTP(S) URL: {value}"
-    );
-    Ok(())
-}
-
 pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
     let path = fs::canonicalize(path).with_context(|| format!("Cannot find {}", path.display()))?;
     let mut value = crate::format::parse(&path, &fs::read_to_string(&path)?)?;

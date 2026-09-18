@@ -65,8 +65,8 @@ enum Commands {
     },
     /// Delete saved imports, namespace renames, browser selection, and hooks
     Nuke,
-    /// Print shell integration for directory shortcuts
-    Init { shell: shell::Shell },
+    /// Run interactive setup, or print integration for an explicitly named shell
+    Init { shell: Option<shell::Shell> },
     #[command(name = "__lookup", hide = true, disable_help_flag = true)]
     ScopedLookup {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -135,7 +135,7 @@ fn run() -> Result<i32> {
     if let Commands::Prompt { request, response } = command {
         return ui::run_prompt(&request, &response).map(|_| 0);
     }
-    if let Commands::Init { shell } = command {
+    if let Commands::Init { shell: Some(shell) } = command {
         print!("{}", shell::init(shell));
         return Ok(0);
     }
@@ -154,6 +154,10 @@ fn run() -> Result<i32> {
         return Ok(0);
     }
     let mut state = State::load(&path)?;
+    if let Commands::Init { shell: None } = command {
+        setup::interactive(&mut state, &path)?;
+        return Ok(0);
+    }
     if let Commands::Aliases { shell } = command {
         print!("{}", alias::functions(&state, &path, shell)?);
         return Ok(0);

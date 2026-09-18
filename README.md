@@ -44,16 +44,24 @@ cargo install --path .
 qrlkit = 'https://github.com/qrlkit/qrlkit-rs'
 ```
 
-*Step 3* Run init to import files and set browser 
+*Step 3* Run interactive setup
 
 ```
 qrlkit init
 ```
 
+Choose an installed browser, then a supported shell, filehook command, and
+dirhook command. Press Enter for the detected shell (Bash if detection fails on
+Unix, PowerShell on Windows), printing file paths, and changing directories.
+Custom hooks use the unquoted `file` or `dir` placeholder. Setup saves your
+preferences and installs shell integration; open a new terminal to activate it.
+Import your config with `qrlkit add <file-or-directory>`.
+
 ## Features
 
 - Keys are turned in cli-tool commands
 - Supports toml, yaml, json
+- Open browser settings and extension management using internal URLs.
 
 - Defaults:
     - URLs opens in default browser
@@ -65,6 +73,20 @@ qrlkit init
 - Urls and paths can be modified with user inputs
 - Scripts can also use inputs
 - Name collisions are handled by qrlkit cli on import 
+
+For example, add these links to a config:
+
+```toml
+[browser]
+settings = "chrome://settings/"
+extensions = "chrome://extensions/"
+```
+
+Use the scheme for your selected browser: `chrome://`, `edge://`, `brave://`,
+`vivaldi://`, or `opera://`. Firefox uses `about:preferences` for settings and
+`about:addons` for extension management. Links open in the browser selected with
+`qrlkit set-browser`; select a browser that supports the URL. Safari settings
+are not supported through these internal URLs.
 
 ## Commands
 
@@ -78,6 +100,7 @@ qrlkit init
 | `qrlkit set-browser` | Choose the default browser |
 | `qrlkit set-filehook <command>` | Choose the default file action (`--clear` restores path printing) |
 | `qrlkit set-dirhook <command>` | Choose the directory hook (`--clear` restores changing directory) |
+| `qrlkit init` | Choose browser, shell, filehook, and dirhook interactively |
 | `qrlkit init <shell>` | Print the directory wrapper for manual setup |
 | `qrlkit nuke` | Reset imports, renames, browser selection, and hooks |
 | `qrlkit --help` | Show help |

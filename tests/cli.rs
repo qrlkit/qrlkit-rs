@@ -289,6 +289,19 @@ fn filesystem_resources_resolve_from_shell_and_never_run_files() {
 }
 
 #[test]
+fn init_without_shell_reaches_browser_prompt_without_changing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("state.yaml");
+    let result = run(&config, &["init"]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(error.contains("Choose the browser"), "{error}");
+    assert!(error.contains("interactive terminal"), "{error}");
+    assert!(!error.contains("required arguments"), "{error}");
+    assert!(!config.exists());
+}
+
+#[test]
 fn shell_initialization_does_not_require_state() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("state.yaml");
