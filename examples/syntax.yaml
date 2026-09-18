@@ -1,0 +1,24 @@
+# qrlkit add examples/syntax.yaml
+
+# Open a URL
+web:
+  docs: https://docs.rs/ratatui/latest/ratatui/
+# Relative to your shell: change directory or print a file path
+paths:
+  repo: ./
+  # Absolute path (Windows: C:\work\project)
+  project: /home/bob/work/project
+  readme: ./README.md
+scripts:
+  # qrlkit scripts greet "friend"
+  greet:
+    $run: |
+      printf 'Hello, %s!\n' "$1"
+      printf 'From %s\n' "$PWD"
+    $shell: bash
+  # qrlkit scripts greet-windows "friend"
+  greet-windows:
+    $run: |
+      Write-Output "Hello, $($args[0])!"
+      Write-Output "From $PWD"
+    $shell: pwsh
