@@ -142,10 +142,25 @@ fn run() -> Result<i32> {
     let path = cli.config.map(Ok).unwrap_or_else(store::default_path)?;
     // Reset must work even when state is corrupt or browser setup is incomplete.
     if matches!(command, Commands::Nuke) {
+        let shell_changed = setup::remove_integration()?;
         match std::fs::remove_file(&path) {
-            Ok(()) => println!("QRL state deleted. Start again with qrlkit add <path>."),
+            Ok(()) => println!(
+                "QRL state deleted{} Start again with qrlkit add <path>.",
+                if shell_changed {
+                    " and shell integration removed."
+                } else {
+                    "."
+                }
+            ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                println!("No QRL state to delete. Start with qrlkit add <path>.");
+                println!(
+                    "No QRL state to delete{} Start with qrlkit add <path>.",
+                    if shell_changed {
+                        "; shell integration removed."
+                    } else {
+                        "."
+                    }
+                );
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("Cannot delete {}", path.display()));

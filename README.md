@@ -1,7 +1,11 @@
-# Quick Resource Locators (qrlkit)
+![](QRLs.png)
 
-A config-file-to-CLI runtime written in Rust. Organize links, directories, files,
-and scripts into TOML, YAML, or JSON, then run them from your terminal.
+# Quick Resource Locators (QRLs)
+
+QRLs are small shortcuts you define for your key bookmarks, 
+files, directories, scripts etc. Simply type them into `.toml`, 
+`.yaml` or '.json' files and `qrlkit` converts them to cli-tools. 
+Its quick and personalizeable. 
 
 ```toml
 # resources.toml

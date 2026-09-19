@@ -102,6 +102,22 @@ fn nuke_resets_only_selected_state_and_handles_corruption_and_absence() {
     assert!(config.is_dir());
 }
 
+#[test]
+fn nuke_removes_managed_shell_integration_but_preserves_user_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("state.yaml");
+    fs::write(&config, "version: 1\nbrowser: null\nsources: []\n").unwrap();
+    let startup = dir.path().join(".zshrc");
+    fs::write(
+        &startup,
+        "export KEEP_ME=yes\n# >>> QRL shell integration >>>\nold integration\n# <<< QRL shell integration <<<\n",
+    )
+    .unwrap();
+    let output = run(&config, &["nuke"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::read_to_string(startup).unwrap(), "export KEEP_ME=yes\n");
+}
+
 fn seeded_config(dir: &Path) -> std::path::PathBuf {
     let config = dir.join("state.yaml");
     fs::write(

@@ -110,6 +110,43 @@ fn configured_text(original: &str, shell: Shell) -> Result<String> {
     ))
 }
 
+fn remove_configured_text(original: &str) -> Result<String> {
+    let starts: Vec<_> = original.match_indices(START).collect();
+    let ends: Vec<_> = original.match_indices(END).collect();
+    ensure!(
+        starts.len() == ends.len() && starts.len() <= 1,
+        "Malformed QRL markers; startup file left unchanged"
+    );
+    let (Some((start, _)), Some((end, _))) = (starts.first(), ends.first()) else {
+        return Ok(original.into());
+    };
+    ensure!(
+        start < end,
+        "Malformed QRL markers; startup file left unchanged"
+    );
+    let after = end + END.len();
+    let after = after + usize::from(original[after..].starts_with('\n'));
+    let before = &original[..*start];
+    let suffix = &original[after..];
+    Ok(format!(
+        "{}{}{}",
+        before,
+        if !before.is_empty() && !before.ends_with('\n') && !suffix.is_empty() {
+            "\n"
+        } else {
+            ""
+        },
+        suffix
+    ))
+}
+
+/// Remove the managed shell integration block, if one is installed.
+pub fn remove_integration() -> Result<bool> {
+    let shell = detect()?;
+    let path = startup(&shell)?;
+    install_with(&path, remove_configured_text)
+}
+
 fn install(path: &Path, shell: Shell) -> Result<bool> {
     install_with(path, |original| configured_text(original, shell))
 }
