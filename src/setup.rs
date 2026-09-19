@@ -331,15 +331,10 @@ pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
     })?;
     if changed {
         let activation = match shell {
-            Shell::Bash | Shell::Zsh | Shell::Fish => {
-                format!(
-                    "source {}",
-                    crate::alias::quote(&path.to_string_lossy(), &shell)
-                )
-            }
-            Shell::Powershell => {
-                format!(". {}", crate::alias::quote(&path.to_string_lossy(), &shell))
-            }
+            Shell::Bash => "exec bash".to_owned(),
+            Shell::Zsh => "exec zsh".to_owned(),
+            Shell::Fish => "exec fish".to_owned(),
+            Shell::Powershell => "pwsh".to_owned(),
         };
         eprintln!(
             "QRL aliases configured in {}.\nTo activate tools start a new terminal or run:\n{}",

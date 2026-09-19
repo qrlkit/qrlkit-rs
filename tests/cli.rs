@@ -709,7 +709,7 @@ fn directory_import_supports_mixed_formats_skips_existing_and_is_not_recursive()
     let stderr = String::from_utf8_lossy(&first.stderr);
     assert!(stderr.contains("QRL aliases configured in"));
     assert!(stderr.contains("To activate tools start a new terminal or run:"));
-    assert!(stderr.contains("source "));
+    assert!(stderr.contains("exec zsh"));
     let result = run(&config, &["add", sources.to_str().unwrap()]);
     assert!(result.status.success(), "{result:?}");
     assert_eq!(
