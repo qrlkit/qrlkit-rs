@@ -78,20 +78,6 @@ Import your config with `qrlkit add <file-or-directory>`.
 - Scripts can also use inputs
 - Name collisions are handled by qrlkit cli on import 
 
-For example, add these links to a config:
-
-```toml
-[browser]
-settings = "chrome://settings/"
-extensions = "chrome://extensions/"
-```
-
-Use the scheme for your selected browser: `chrome://`, `edge://`, `brave://`,
-`vivaldi://`, or `opera://`. Firefox uses `about:preferences` for settings and
-`about:addons` for extension management. Links open in the browser selected with
-`qrlkit set-browser`; select a browser that supports the URL. Safari settings
-are not supported through these internal URLs.
-
 ## Commands
 
 | Command | What it does |
