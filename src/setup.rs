@@ -323,16 +323,28 @@ pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
                 }
             })
             .collect::<String>();
-        let updated = configured_text(&original, shell)?;
+        let updated = configured_text(&original, shell.clone())?;
         if updated.lines().any(|line| line == loader) {
             return Ok(updated);
         }
         Ok(format!("{updated}\n{loader}\n"))
     })?;
     if changed {
+        let activation = match shell {
+            Shell::Bash | Shell::Zsh | Shell::Fish => {
+                format!(
+                    "source {}",
+                    crate::alias::quote(&path.to_string_lossy(), &shell)
+                )
+            }
+            Shell::Powershell => {
+                format!(". {}", crate::alias::quote(&path.to_string_lossy(), &shell))
+            }
+        };
         eprintln!(
-            "QRL aliases configured in {}. Open a new terminal to activate them.",
-            path.display()
+            "QRL aliases configured in {}.\nTo activate tools start a new terminal or run:\n{}",
+            path.display(),
+            activation
         );
     }
     Ok(())

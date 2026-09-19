@@ -704,11 +704,12 @@ fn directory_import_supports_mixed_formats_skips_existing_and_is_not_recursive()
     }
     fs::create_dir(sources.join("nested.json")).unwrap();
     fs::write(sources.join("nested.json/invalid.toml"), "broken = [").unwrap();
-    assert!(
-        run(&config, &["add", sources.join("a.toml").to_str().unwrap()])
-            .status
-            .success()
-    );
+    let first = run(&config, &["add", sources.join("a.toml").to_str().unwrap()]);
+    assert!(first.status.success(), "{first:?}");
+    let stderr = String::from_utf8_lossy(&first.stderr);
+    assert!(stderr.contains("QRL aliases configured in"));
+    assert!(stderr.contains("To activate tools start a new terminal or run:"));
+    assert!(stderr.contains("source "));
     let result = run(&config, &["add", sources.to_str().unwrap()]);
     assert!(result.status.success(), "{result:?}");
     assert_eq!(
