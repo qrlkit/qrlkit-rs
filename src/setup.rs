@@ -3,6 +3,7 @@ use crate::{
     store::State,
 };
 use anyhow::{Context, Result, bail, ensure};
+use clap::ValueEnum;
 use std::{
     fs,
     io::Write,
@@ -109,6 +110,43 @@ fn configured_text(original: &str, shell: Shell) -> Result<String> {
     ))
 }
 
+fn remove_configured_text(original: &str) -> Result<String> {
+    let starts: Vec<_> = original.match_indices(START).collect();
+    let ends: Vec<_> = original.match_indices(END).collect();
+    ensure!(
+        starts.len() == ends.len() && starts.len() <= 1,
+        "Malformed QRL markers; startup file left unchanged"
+    );
+    let (Some((start, _)), Some((end, _))) = (starts.first(), ends.first()) else {
+        return Ok(original.into());
+    };
+    ensure!(
+        start < end,
+        "Malformed QRL markers; startup file left unchanged"
+    );
+    let after = end + END.len();
+    let after = after + usize::from(original[after..].starts_with('\n'));
+    let before = &original[..*start];
+    let suffix = &original[after..];
+    Ok(format!(
+        "{}{}{}",
+        before,
+        if !before.is_empty() && !before.ends_with('\n') && !suffix.is_empty() {
+            "\n"
+        } else {
+            ""
+        },
+        suffix
+    ))
+}
+
+/// Remove the managed shell integration block, if one is installed.
+pub fn remove_integration() -> Result<bool> {
+    let shell = detect()?;
+    let path = startup(&shell)?;
+    install_with(&path, remove_configured_text)
+}
+
 fn install(path: &Path, shell: Shell) -> Result<bool> {
     install_with(path, |original| configured_text(original, shell))
 }
@@ -177,7 +215,7 @@ pub fn for_directories(state: &State) -> Result<()> {
     if !has_directory {
         return Ok(());
     }
-    let shell = detect()?;
+    let shell = state.shell.clone().map(Ok).unwrap_or_else(detect)?;
     let path = startup(&shell)?;
     let changed = install(&path, shell)?;
     eprintln!(
@@ -192,12 +230,74 @@ pub fn for_directories(state: &State) -> Result<()> {
     Ok(())
 }
 
+/// Configure preferences only after all prompts have completed successfully.
+pub fn interactive(state: &mut State, config: &Path) -> Result<()> {
+    let browser = crate::browser::choose()?;
+    let default_shell = detect().unwrap_or(if cfg!(windows) {
+        Shell::Powershell
+    } else {
+        Shell::Bash
+    });
+    let title = format!(
+        "Choose shell: bash, zsh, fish, powershell (empty for {})",
+        default_shell.to_possible_value().unwrap().get_name()
+    );
+    let mut prompt = title.clone();
+    let shell = loop {
+        let value = crate::ui::input_optional(&prompt)?;
+        if value.is_empty() {
+            break default_shell;
+        }
+        match Shell::from_str(&value, true) {
+            Ok(shell) => break shell,
+            Err(_) => prompt = format!("Unsupported shell. {title}"),
+        }
+    };
+    let filehook = choose_hook(
+        "Filehook command (use file, e.g. nvim file; empty to print path)",
+        crate::filehook::validate,
+    )?;
+    let dirhook = choose_hook(
+        "Dirhook command (use dir, e.g. cd dir; empty to change directory)",
+        crate::dirhook::validate,
+    )?;
+    let startup_path = startup(&shell)?;
+    state.browser = Some(browser);
+    state.shell = Some(shell.clone());
+    state.filehook = filehook;
+    state.dirhook = dirhook;
+    state.save(config)?;
+    install(&startup_path, shell)
+        .context("Preferences saved, but shell integration failed; run qrlkit init to retry")?;
+    for_aliases(state, config)
+        .context("Preferences saved, but alias setup failed; run qrlkit init to retry")?;
+    println!(
+        "QRL configured. Shell integration installed in {}. Open a new terminal to activate it.",
+        startup_path.display()
+    );
+    Ok(())
+}
+
+fn choose_hook(title: &str, validate: impl Fn(&str) -> Result<()>) -> Result<Option<String>> {
+    let mut prompt = title.to_owned();
+    loop {
+        let value = crate::ui::input_optional(&prompt)?;
+        if value.is_empty() {
+            return Ok(None);
+        }
+        match validate(&value) {
+            Ok(()) => return Ok(Some(value)),
+            Err(error) => prompt = format!("{error}. {title}"),
+        }
+    }
+}
+
 /// Load aliases from live state on each new shell, so removals need no stale functions.
 pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
     if state.sources.is_empty() {
         return Ok(());
     }
-    let shell = detect()?;
+    let shell = state.shell.clone().map(Ok).unwrap_or_else(detect)?;
     let path = startup(&shell)?;
     let config = crate::alias::quote(&std::path::absolute(config)?.to_string_lossy(), &shell);
     let loader = match shell {
@@ -223,16 +323,23 @@ pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
                 }
             })
             .collect::<String>();
-        let updated = configured_text(&original, shell)?;
+        let updated = configured_text(&original, shell.clone())?;
         if updated.lines().any(|line| line == loader) {
             return Ok(updated);
         }
         Ok(format!("{updated}\n{loader}\n"))
     })?;
     if changed {
+        let activation = match shell {
+            Shell::Bash => "exec bash".to_owned(),
+            Shell::Zsh => "exec zsh".to_owned(),
+            Shell::Fish => "exec fish".to_owned(),
+            Shell::Powershell => "pwsh".to_owned(),
+        };
         eprintln!(
-            "QRL aliases configured in {}. Open a new terminal to activate them.",
-            path.display()
+            "QRL aliases configured in {}.\nTo activate tools start a new terminal or run:\n{}",
+            path.display(),
+            activation
         );
     }
     Ok(())

@@ -16,6 +16,16 @@ use std::io::{self, IsTerminal};
 struct Restore {
     origin: Option<Position>,
 }
+
+fn prompt_height(options: usize, input: bool, minimal: bool) -> u16 {
+    if input {
+        2
+    } else if minimal {
+        options.max(1) as u16
+    } else {
+        1 + options.max(1) as u16
+    }
+}
 impl Drop for Restore {
     fn drop(&mut self) {
         // Use the latest viewport origin: drawing may have scrolled or resized it.
@@ -32,7 +42,13 @@ impl Drop for Restore {
     }
 }
 
-fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) -> Result<String> {
+fn render_prompt(
+    title: &str,
+    options: &[String],
+    input: bool,
+    minimal: bool,
+    allow_empty: bool,
+) -> Result<String> {
     ensure!(
         io::stdin().is_terminal() && io::stderr().is_terminal(),
         "{title}: an interactive terminal is required"
@@ -42,11 +58,7 @@ fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) ->
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stderr()),
         TerminalOptions {
-            viewport: Viewport::Inline(if minimal {
-                options.len().clamp(1, 4) as u16
-            } else {
-                6
-            }),
+            viewport: Viewport::Inline(prompt_height(options.len(), input, minimal)),
         },
     )?;
     let mut selected = 0usize;
@@ -65,19 +77,15 @@ fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) ->
                 let rows = if minimal {
                     usize::from(frame.area().height).max(1)
                 } else {
-                    4
+                    options.len().max(1)
                 };
-                let start = selected.saturating_sub(rows - 1);
-                for (i, option) in options.iter().enumerate().skip(start).take(rows) {
+                for (i, option) in options.iter().enumerate().take(rows) {
                     lines.push(format!(
                         "{} {}",
                         if i == selected { ">" } else { " " },
                         option
                     ));
                 }
-            }
-            if !minimal {
-                lines.push("↑/↓ or j/k select · Enter confirm · Esc cancel".into());
             }
             frame.render_widget(Paragraph::new(lines.join("\n")), frame.area());
         })?;
@@ -88,7 +96,7 @@ fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) ->
             match key.code {
                 KeyCode::Esc => break None,
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break None,
-                KeyCode::Enter if input && !text.trim().is_empty() => {
+                KeyCode::Enter if input && (allow_empty || !text.trim().is_empty()) => {
                     break Some(text.trim().into());
                 }
                 KeyCode::Enter if !input => break Some(selected.to_string()),
@@ -112,17 +120,38 @@ fn render_prompt(title: &str, options: &[String], input: bool, minimal: bool) ->
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::prompt_height;
+
+    #[test]
+    fn picker_height_includes_every_option() {
+        assert_eq!(prompt_height(0, false, true), 1);
+        assert_eq!(prompt_height(7, false, true), 7);
+        assert_eq!(prompt_height(7, false, false), 8);
+        assert_eq!(prompt_height(7, true, false), 2);
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PromptRequest {
     title: String,
     options: Vec<String>,
     input: bool,
     minimal: bool,
+    #[serde(default)]
+    allow_empty: bool,
 }
 
 // Crossterm sends cursor queries to stdout. Isolate the prompt in a child whose
 // stdout and stderr both point at the terminal, preserving the parent's stdout.
-fn prompt(title: &str, options: &[String], input: bool, minimal: bool) -> Result<String> {
+fn prompt(
+    title: &str,
+    options: &[String],
+    input: bool,
+    minimal: bool,
+    allow_empty: bool,
+) -> Result<String> {
     ensure!(
         io::stdin().is_terminal() && io::stderr().is_terminal(),
         "{title}: an interactive terminal is required"
@@ -134,6 +163,7 @@ fn prompt(title: &str, options: &[String], input: bool, minimal: bool) -> Result
         options: options.to_vec(),
         input,
         minimal,
+        allow_empty,
     };
     std::fs::write(request.path(), serde_yaml_ng::to_string(&data)?)?;
     let status = std::process::Command::new(std::env::current_exe()?)
@@ -154,23 +184,34 @@ pub fn run_prompt(request: &std::path::Path, response: &std::path::Path) -> Resu
         data.input || !data.options.is_empty(),
         "No options available"
     );
-    let result = render_prompt(&data.title, &data.options, data.input, data.minimal)
-        .map_err(|error| error.to_string());
+    let result = render_prompt(
+        &data.title,
+        &data.options,
+        data.input,
+        data.minimal,
+        data.allow_empty,
+    )
+    .map_err(|error| error.to_string());
     std::fs::write(response, serde_yaml_ng::to_string(&result)?)?;
     Ok(())
 }
 
 pub fn select(title: &str, options: &[String]) -> Result<usize> {
     ensure!(!options.is_empty(), "No options available");
-    Ok(prompt(title, options, false, false)?.parse()?)
+    Ok(prompt(title, options, false, false, false)?.parse()?)
 }
 
 pub fn input(title: &str) -> Result<String> {
-    prompt(title, &[], true, false)
+    prompt(title, &[], true, false, false)
+}
+
+/// Input where pressing Enter accepts the caller's default.
+pub fn input_optional(title: &str) -> Result<String> {
+    prompt(title, &[], true, false, true)
 }
 
 /// Resource navigation only: keys and a selection marker, sized to the list.
 pub fn select_key(options: &[String]) -> Result<usize> {
     ensure!(!options.is_empty(), "No keys available");
-    Ok(prompt("Resource selection", options, false, true)?.parse()?)
+    Ok(prompt("Resource selection", options, false, true, false)?.parse()?)
 }

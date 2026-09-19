@@ -102,6 +102,22 @@ fn nuke_resets_only_selected_state_and_handles_corruption_and_absence() {
     assert!(config.is_dir());
 }
 
+#[test]
+fn nuke_removes_managed_shell_integration_but_preserves_user_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("state.yaml");
+    fs::write(&config, "version: 1\nbrowser: null\nsources: []\n").unwrap();
+    let startup = dir.path().join(".zshrc");
+    fs::write(
+        &startup,
+        "export KEEP_ME=yes\n# >>> QRL shell integration >>>\nold integration\n# <<< QRL shell integration <<<\n",
+    )
+    .unwrap();
+    let output = run(&config, &["nuke"]);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::read_to_string(startup).unwrap(), "export KEEP_ME=yes\n");
+}
+
 fn seeded_config(dir: &Path) -> std::path::PathBuf {
     let config = dir.join("state.yaml");
     fs::write(
@@ -286,6 +302,19 @@ fn filesystem_resources_resolve_from_shell_and_never_run_files() {
             .unwrap()
             .contains("browser: null")
     );
+}
+
+#[test]
+fn init_without_shell_reaches_browser_prompt_without_changing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("state.yaml");
+    let result = run(&config, &["init"]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success());
+    assert!(error.contains("Choose the browser"), "{error}");
+    assert!(error.contains("interactive terminal"), "{error}");
+    assert!(!error.contains("required arguments"), "{error}");
+    assert!(!config.exists());
 }
 
 #[test]
@@ -675,11 +704,12 @@ fn directory_import_supports_mixed_formats_skips_existing_and_is_not_recursive()
     }
     fs::create_dir(sources.join("nested.json")).unwrap();
     fs::write(sources.join("nested.json/invalid.toml"), "broken = [").unwrap();
-    assert!(
-        run(&config, &["add", sources.join("a.toml").to_str().unwrap()])
-            .status
-            .success()
-    );
+    let first = run(&config, &["add", sources.join("a.toml").to_str().unwrap()]);
+    assert!(first.status.success(), "{first:?}");
+    let stderr = String::from_utf8_lossy(&first.stderr);
+    assert!(stderr.contains("QRL aliases configured in"));
+    assert!(stderr.contains("To activate tools start a new terminal or run:"));
+    assert!(stderr.contains("exec zsh"));
     let result = run(&config, &["add", sources.to_str().unwrap()]);
     assert!(result.status.success(), "{result:?}");
     assert_eq!(

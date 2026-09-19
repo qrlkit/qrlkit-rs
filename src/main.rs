@@ -65,8 +65,8 @@ enum Commands {
     },
     /// Delete saved imports, namespace renames, browser selection, and hooks
     Nuke,
-    /// Print shell integration for directory shortcuts
-    Init { shell: shell::Shell },
+    /// Run interactive setup, or print integration for an explicitly named shell
+    Init { shell: Option<shell::Shell> },
     #[command(name = "__lookup", hide = true, disable_help_flag = true)]
     ScopedLookup {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -135,17 +135,32 @@ fn run() -> Result<i32> {
     if let Commands::Prompt { request, response } = command {
         return ui::run_prompt(&request, &response).map(|_| 0);
     }
-    if let Commands::Init { shell } = command {
+    if let Commands::Init { shell: Some(shell) } = command {
         print!("{}", shell::init(shell));
         return Ok(0);
     }
     let path = cli.config.map(Ok).unwrap_or_else(store::default_path)?;
     // Reset must work even when state is corrupt or browser setup is incomplete.
     if matches!(command, Commands::Nuke) {
+        let shell_changed = setup::remove_integration()?;
         match std::fs::remove_file(&path) {
-            Ok(()) => println!("QRL state deleted. Start again with qrlkit add <path>."),
+            Ok(()) => println!(
+                "QRL state deleted{} Start again with qrlkit add <path>.",
+                if shell_changed {
+                    " and shell integration removed."
+                } else {
+                    "."
+                }
+            ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                println!("No QRL state to delete. Start with qrlkit add <path>.");
+                println!(
+                    "No QRL state to delete{} Start with qrlkit add <path>.",
+                    if shell_changed {
+                        "; shell integration removed."
+                    } else {
+                        "."
+                    }
+                );
             }
             Err(error) => {
                 return Err(error).with_context(|| format!("Cannot delete {}", path.display()));
@@ -154,6 +169,10 @@ fn run() -> Result<i32> {
         return Ok(0);
     }
     let mut state = State::load(&path)?;
+    if let Commands::Init { shell: None } = command {
+        setup::interactive(&mut state, &path)?;
+        return Ok(0);
+    }
     if let Commands::Aliases { shell } = command {
         print!("{}", alias::functions(&state, &path, shell)?);
         return Ok(0);

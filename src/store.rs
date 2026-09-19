@@ -45,6 +45,8 @@ pub struct State {
     pub version: u32,
     pub browser: Option<Browser>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<crate::shell::Shell>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filehook: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dirhook: Option<String>,
@@ -56,6 +58,7 @@ impl Default for State {
         Self {
             version: 1,
             browser: None,
+            shell: None,
             filehook: None,
             dirhook: None,
             sources: vec![],

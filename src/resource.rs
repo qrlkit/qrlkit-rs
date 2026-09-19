@@ -2,14 +2,55 @@ use anyhow::{Context, Result, bail, ensure};
 use std::path::{Path, PathBuf};
 
 pub fn is_url(value: &str) -> bool {
-    value.split_once("://").is_some_and(|(scheme, _)| {
-        scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
+    value.split_once(':').is_some_and(|(scheme, _)| {
+        matches!(
+            scheme.to_ascii_lowercase().as_str(),
+            "http" | "https" | "chrome" | "edge" | "brave" | "vivaldi" | "opera" | "about"
+        )
     })
+}
+
+pub fn is_browser_url(value: &str) -> bool {
+    is_url(value)
+        && !value.split_once(':').is_some_and(|(scheme, _)| {
+            scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+        })
+}
+
+pub fn validate_url(value: &str) -> Result<()> {
+    ensure!(
+        value.trim() == value && !value.chars().any(char::is_control),
+        "URLs cannot contain surrounding whitespace or control characters"
+    );
+    let url = url::Url::parse(value).context("Invalid URL")?;
+    let valid = match url.scheme() {
+        "http" | "https" => url.host_str().is_some(),
+        "chrome" | "edge" | "brave" | "vivaldi" | "opera" => {
+            url.host_str().is_some_and(|host| !host.is_empty())
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.port().is_none()
+        }
+        "about" => {
+            url.cannot_be_a_base()
+                && !url.path().is_empty()
+                && url
+                    .path()
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }
+        _ => false,
+    };
+    ensure!(
+        valid,
+        "Expected an HTTP(S) URL or browser-internal URL: {value}"
+    );
+    Ok(())
 }
 
 pub fn validate(value: &str) -> Result<()> {
     if is_url(value) {
-        return crate::import::validate_url(value);
+        return validate_url(value);
     }
     ensure!(
         !value.contains(['\n', '\r', '\0']),
@@ -21,7 +62,7 @@ pub fn validate(value: &str) -> Result<()> {
             || value.starts_with("./")
             || value.starts_with("../")
             || Path::new(value).is_absolute(),
-        "Expected an HTTP(S) URL or explicit path (~/, /, ./, ../, or a Windows absolute path): {value}"
+        "Expected an HTTP(S) URL, browser-internal URL, or explicit path (~/, /, ./, ../, or a Windows absolute path): {value}"
     );
     Ok(())
 }
@@ -76,6 +117,51 @@ pub fn resolve(value: &str) -> Result<Resource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_pages_remain_urls() {
+        for value in [
+            "chrome://extensions/",
+            "chrome://settings/content",
+            "CHROME://settings/",
+            "edge://extensions/?id=abc",
+            "brave://settings/",
+            "vivaldi://extensions/",
+            "opera://settings/",
+            "about:preferences#privacy",
+            "about:addons",
+        ] {
+            assert!(is_url(value), "{value}");
+            assert_eq!(normalize(value).unwrap(), value);
+            assert!(matches!(resolve(value).unwrap(), Resource::Url(url) if url == value));
+        }
+        for value in [
+            "chrome:",
+            "chrome:///",
+            "chrome:settings",
+            "about:",
+            "about://addons",
+            "chrome://user@settings/",
+            "edge://settings:80/",
+            "chrome://settings/\n",
+            "about:add\tons",
+            "javascript:alert(1)",
+            "data:text/html,test",
+            "file:///tmp/test",
+            "unknown://settings",
+        ] {
+            assert!(validate(value).is_err(), "{value}");
+        }
+        assert_eq!(
+            crate::template::expand(
+                "chrome://extensions/?id={id}",
+                &["a &b".into()],
+                |_| panic!()
+            )
+            .unwrap(),
+            "chrome://extensions/?id=a%20%26b"
+        );
+    }
+
     #[test]
     fn home_and_relative_paths_expand_without_requiring_existence() {
         assert_eq!(normalize("./not-created").unwrap(), "./not-created");

@@ -1,6 +1,7 @@
 use clap::ValueEnum;
 
-#[derive(Clone, ValueEnum)]
+#[derive(Clone, Debug, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Shell {
     Bash,
     Zsh,
