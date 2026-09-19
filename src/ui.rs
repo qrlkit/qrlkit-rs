@@ -16,6 +16,16 @@ use std::io::{self, IsTerminal};
 struct Restore {
     origin: Option<Position>,
 }
+
+fn prompt_height(options: usize, input: bool, minimal: bool) -> u16 {
+    if input {
+        2
+    } else if minimal {
+        options.max(1) as u16
+    } else {
+        1 + options.max(1) as u16
+    }
+}
 impl Drop for Restore {
     fn drop(&mut self) {
         // Use the latest viewport origin: drawing may have scrolled or resized it.
@@ -48,11 +58,7 @@ fn render_prompt(
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stderr()),
         TerminalOptions {
-            viewport: Viewport::Inline(if minimal {
-                options.len().clamp(1, 4) as u16
-            } else {
-                6
-            }),
+            viewport: Viewport::Inline(prompt_height(options.len(), input, minimal)),
         },
     )?;
     let mut selected = 0usize;
@@ -71,26 +77,15 @@ fn render_prompt(
                 let rows = if minimal {
                     usize::from(frame.area().height).max(1)
                 } else {
-                    4
+                    options.len().max(1)
                 };
-                let start = selected.saturating_sub(rows - 1);
-                for (i, option) in options.iter().enumerate().skip(start).take(rows) {
+                for (i, option) in options.iter().enumerate().take(rows) {
                     lines.push(format!(
                         "{} {}",
                         if i == selected { ">" } else { " " },
                         option
                     ));
                 }
-            }
-            if !minimal {
-                lines.push(
-                    if input {
-                        "Enter confirm · Esc cancel"
-                    } else {
-                        "↑/↓ or j/k select · Enter confirm · Esc cancel"
-                    }
-                    .into(),
-                );
             }
             frame.render_widget(Paragraph::new(lines.join("\n")), frame.area());
         })?;
@@ -122,6 +117,19 @@ fn render_prompt(
     match result {
         Some(result) => Ok(result),
         None => bail!("user cancelled"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prompt_height;
+
+    #[test]
+    fn picker_height_includes_every_option() {
+        assert_eq!(prompt_height(0, false, true), 1);
+        assert_eq!(prompt_height(7, false, true), 7);
+        assert_eq!(prompt_height(7, false, false), 8);
+        assert_eq!(prompt_height(7, true, false), 2);
     }
 }
 
