@@ -19,8 +19,6 @@ fn detect() -> Result<Shell> {
         Some("bash") => Ok(Shell::Bash),
         Some("zsh") => Ok(Shell::Zsh),
         Some("fish") => Ok(Shell::Fish),
-        Some("pwsh" | "powershell") => Ok(Shell::Powershell),
-        _ if cfg!(windows) => Ok(Shell::Powershell),
         _ => bail!(
             "Cannot detect a supported shell from SHELL; use qrlkit init --help for manual integration"
         ),
@@ -45,22 +43,6 @@ fn startup(shell: &Shell) -> Result<PathBuf> {
         Shell::Fish => env_path("XDG_CONFIG_HOME")
             .unwrap_or_else(|| home.join(".config"))
             .join("fish/config.fish"),
-        Shell::Powershell => {
-            let mut result = None;
-            for executable in ["pwsh", "powershell"] {
-                if let Ok(output) = std::process::Command::new(executable)
-                    .args(["-NoLogo", "-NoProfile", "-Command", "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $PROFILE.CurrentUserAllHosts"])
-                    .output()
-                    && output.status.success()
-                {
-                        let path = PathBuf::from(String::from_utf8(output.stdout)?.trim());
-                        if path.is_absolute() { result = Some(path); break; }
-                }
-            }
-            result.context(
-                "Cannot locate a PowerShell profile; install PowerShell or use qrlkit init powershell",
-            )?
-        }
     })
 }
 
@@ -69,7 +51,6 @@ fn configured_text(original: &str, shell: Shell) -> Result<String> {
         Shell::Bash => "eval \"$(qrlkit init bash)\"",
         Shell::Zsh => "eval \"$(qrlkit init zsh)\"",
         Shell::Fish => "qrlkit init fish | source",
-        Shell::Powershell => "qrlkit init powershell | Out-String | Invoke-Expression",
     };
     if !original.contains(START)
         && (original.lines().any(|line| line.trim() == manual)
@@ -233,13 +214,9 @@ pub fn for_directories(state: &State) -> Result<()> {
 /// Configure preferences only after all prompts have completed successfully.
 pub fn interactive(state: &mut State, config: &Path) -> Result<()> {
     let browser = crate::browser::choose()?;
-    let default_shell = detect().unwrap_or(if cfg!(windows) {
-        Shell::Powershell
-    } else {
-        Shell::Bash
-    });
+    let default_shell = detect().unwrap_or(Shell::Bash);
     let title = format!(
-        "Choose shell: bash, zsh, fish, powershell (empty for {})",
+        "Choose shell: bash, zsh, fish (empty for {})",
         default_shell.to_possible_value().unwrap().get_name()
     );
     let mut prompt = title.clone();
@@ -304,11 +281,6 @@ pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
         Shell::Bash => format!("eval \"$(qrlkit --config {config} __aliases bash)\""),
         Shell::Zsh => format!("eval \"$(qrlkit --config {config} __aliases zsh)\""),
         Shell::Fish => format!("qrlkit --config {config} __aliases fish | source"),
-        Shell::Powershell => {
-            format!(
-                "qrlkit --config {config} __aliases powershell | Out-String | Invoke-Expression"
-            )
-        }
     };
     let changed = install_with(&path, |original| {
         // Upgrade the exact loader previously installed for this state file.
@@ -334,7 +306,6 @@ pub fn for_aliases(state: &State, config: &Path) -> Result<()> {
             Shell::Bash => "exec bash".to_owned(),
             Shell::Zsh => "exec zsh".to_owned(),
             Shell::Fish => "exec fish".to_owned(),
-            Shell::Powershell => "pwsh".to_owned(),
         };
         eprintln!(
             "QRL aliases configured in {}.\nTo activate tools start a new terminal or run:\n{}",

@@ -81,15 +81,8 @@ pub fn validate(sources: &[Source]) -> Result<()> {
             "Duplicate alias: {name}"
         );
         if let Some(path) = std::env::var_os("PATH") {
-            let suffixes = if cfg!(windows) {
-                vec!["", ".exe", ".cmd", ".bat", ".com"]
-            } else {
-                vec![""]
-            };
             ensure!(
-                !std::env::split_paths(&path).any(|dir| suffixes
-                    .iter()
-                    .any(|ext| dir.join(format!("{name}{ext}")).is_file())),
+                !std::env::split_paths(&path).any(|dir| dir.join(name).is_file()),
                 "Alias conflicts with an existing command: {name}"
             );
         }
@@ -99,7 +92,6 @@ pub fn validate(sources: &[Source]) -> Result<()> {
 
 pub fn quote(value: &str, shell: &Shell) -> String {
     match shell {
-        Shell::Powershell => format!("'{}'", value.replace('\'', "''")),
         Shell::Fish => format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'")),
         _ => format!("'{}'", value.replace('\'', "'\\''")),
     }
@@ -137,7 +129,6 @@ pub fn functions(state: &State, config: &Path, shell: Shell) -> Result<String> {
         result.push_str(&match shell {
             Shell::Bash | Shell::Zsh => format!("if ! command -v {name} >/dev/null 2>&1; then\n{name}() {{ {command} \"$@\"; }}\nelse\nprintf '%s\\n' 'qrlkit: alias {name} conflicts with an existing command' >&2\nfi\n"),
             Shell::Fish => format!("if not type -q {name}\nfunction {name}\n{command} $argv\nend\nelse\necho 'qrlkit: alias {name} conflicts with an existing command' >&2\nend\n"),
-            Shell::Powershell => format!("if (-not (Get-Command '{name}' -ErrorAction SilentlyContinue)) {{\nfunction global:{name} {{ {command} @args }}\n}} else {{ Write-Warning 'qrlkit: alias {name} conflicts with an existing command' }}\n"),
         });
     }
     Ok(result)

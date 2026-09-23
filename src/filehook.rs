@@ -9,16 +9,10 @@ pub fn validate(hook: &str) -> Result<()> {
 }
 
 pub fn run(hook: &str, path: &Path) -> Result<i32> {
-    let (shell, body) = if cfg!(windows) {
-        let expanded = crate::hook::expand(hook, "file", "$qrlHookFile")?;
-        ("pwsh", format!("$qrlHookFile = $args[0]\n{expanded}"))
-    } else {
-        let expanded = crate::hook::expand(hook, "file", "\"$qrl_hook_file\"")?;
-        ("bash", format!("qrl_hook_file=$1\n{expanded}"))
-    };
+    let expanded = crate::hook::expand(hook, "file", "\"$qrl_hook_file\"")?;
     crate::script::Script {
-        body,
-        shell: shell.into(),
+        body: format!("qrl_hook_file=$1\n{expanded}"),
+        shell: "bash".into(),
         cwd: std::env::current_dir()?,
     }
     .run(&[path.to_str().context("File path is not UTF-8")?.into()])

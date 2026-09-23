@@ -7,7 +7,7 @@ docs = "https://docs.rs/ratatui/latest/ratatui/"
 # Relative to your shell: change directory or print a file path
 [paths]
 repo = "./"
-# Absolute path (Windows: C:\work\project)
+# Absolute path
 project = "/home/bob/work/project"
 readme = "./README.md"
 
@@ -18,11 +18,3 @@ printf 'Hello, %s!\n' "$1"
 printf 'From %s\n' "$PWD"
 '''
 "$shell" = "bash"
-
-# qrlkit scripts greet-windows "friend"
-[scripts.greet-windows]
-"$run" = '''
-Write-Output "Hello, $($args[0])!"
-Write-Output "From $PWD"
-'''
-"$shell" = "pwsh"

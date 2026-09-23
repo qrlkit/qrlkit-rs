@@ -11,10 +11,6 @@
     "greet": {
       "$run": "printf 'Hello, %s!\\n' \"$1\"\nprintf 'From %s\\n' \"$PWD\"\n",
       "$shell": "bash"
-    },
-    "greet-windows": {
-      "$run": "Write-Output \"Hello, $($args[0])!\"\nWrite-Output \"From $PWD\"\n",
-      "$shell": "pwsh"
     }
   }
 }

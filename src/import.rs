@@ -144,13 +144,7 @@ fn flatten(
                 let body = run.as_str().context("$run must be a string")?.to_owned();
                 let shell = match table.get("$shell") {
                     Some(value) => value.as_str().context("$shell must be a string")?,
-                    None => {
-                        if cfg!(windows) {
-                            "pwsh"
-                        } else {
-                            "bash"
-                        }
-                    }
+                    None => "bash",
                 }
                 .to_owned();
                 let script = crate::script::Script {
@@ -542,7 +536,7 @@ mod adapter_tests {
                 BTreeMap::new(),
             )
             .unwrap();
-            assert_eq!(source.entries.len(), 6);
+            assert_eq!(source.entries.len(), 5);
             snapshots.push(serde_yaml_ng::to_string(&source.entries).unwrap());
         }
         assert!(snapshots.windows(2).all(|pair| pair[0] == pair[1]));

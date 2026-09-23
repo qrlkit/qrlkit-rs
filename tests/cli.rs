@@ -322,7 +322,7 @@ fn shell_initialization_does_not_require_state() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("state.yaml");
     fs::write(&config, "corrupt[").unwrap();
-    for shell in ["bash", "zsh", "fish", "powershell"] {
+    for shell in ["bash", "zsh", "fish"] {
         let result = run(&config, &["init", shell]);
         assert!(result.status.success(), "{result:?}");
         assert!(String::from_utf8_lossy(&result.stdout).contains("QRL_CD_FILE"));
@@ -520,27 +520,6 @@ fn script_receives_stdin_but_not_outer_directory_channel() {
     assert_eq!(fs::read_to_string(channel).unwrap(), "untouched");
 }
 
-#[cfg(windows)]
-#[test]
-fn powershell_script_streams_output_and_returns_explicit_exit_status() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("state.yaml");
-    let source = dir.path().join("script.toml");
-    fs::write(
-        &source,
-        "[task]\n\"$run\" = '''Write-Output 'script-output'\nexit 7'''\n",
-    )
-    .unwrap();
-    assert!(
-        run(&config, &["add", source.to_str().unwrap()])
-            .status
-            .success()
-    );
-    let result = run(&config, &["task"]);
-    assert_eq!(result.status.code(), Some(7), "{result:?}");
-    assert!(String::from_utf8_lossy(&result.stdout).contains("script-output"));
-}
-
 #[test]
 fn directory_import_sets_up_shell_once_and_reload_detects_new_directory() {
     let dir = tempfile::tempdir().unwrap();
@@ -660,31 +639,6 @@ fn scripts_reload_before_execution_and_receive_literal_arguments() {
     let result = run(&config, &["task", "must not run"]);
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-}
-
-#[cfg(windows)]
-#[test]
-fn powershell_receives_literal_arguments() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("state.yaml");
-    let source = dir.path().join("source.toml");
-    fs::write(&source, "[task]\n'$run' = '''foreach ($item in $args) { Write-Output \"<$item>\" }'''\n'$shell' = 'pwsh'").unwrap();
-    assert!(
-        run(&config, &["add", source.to_str().unwrap()])
-            .status
-            .success()
-    );
-    let result = run(
-        &config,
-        &["task", "hello world", "--help", "$(throw 'injected')"],
-    );
-    assert!(result.status.success(), "{result:?}");
-    assert_eq!(
-        String::from_utf8(result.stdout)
-            .unwrap()
-            .replace("\r\n", "\n"),
-        "<hello world>\n<--help>\n<$(throw 'injected')>\n"
-    );
 }
 
 #[test]

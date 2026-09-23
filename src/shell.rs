@@ -6,7 +6,6 @@ pub enum Shell {
     Bash,
     Zsh,
     Fish,
-    Powershell,
 }
 
 pub fn init(shell: Shell) -> &'static str {
@@ -48,27 +47,6 @@ pub fn init(shell: Shell) -> &'static str {
     command rm -f -- "$qrl_file"
     return $qrl_status
 end
-"#
-        }
-        Shell::Powershell => {
-            r#"function qrlkit {
-    $qrlFile = [System.IO.Path]::GetTempFileName()
-    $qrlPrevious = $env:QRL_CD_FILE
-    try {
-        $env:QRL_CD_FILE = $qrlFile
-        $qrlExe = (Get-Command qrlkit -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-        & $qrlExe @args
-        $qrlStatus = $LASTEXITCODE
-        if ((Get-Item -LiteralPath $qrlFile).Length -gt 0) {
-            $qrlTarget = [System.IO.File]::ReadAllText($qrlFile).TrimEnd("`r", "`n")
-            Set-Location -LiteralPath $qrlTarget -ErrorAction Stop
-        }
-        $global:LASTEXITCODE = $qrlStatus
-    } finally {
-        $env:QRL_CD_FILE = $qrlPrevious
-        Remove-Item -LiteralPath $qrlFile -Force
-    }
-}
 "#
         }
     }
