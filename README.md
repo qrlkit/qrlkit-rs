@@ -55,8 +55,8 @@ qrlkit init
 ```
 
 Choose an installed browser, then a supported shell, filehook command, and
-dirhook command. Press Enter for the detected shell (Bash if detection fails on
-Unix, PowerShell on Windows), printing file paths, and changing directories.
+dirhook command. Press Enter for the detected shell (Bash if detection fails),
+printing file paths, and changing directories.
 Custom hooks use the unquoted `file` or `dir` placeholder. Setup saves your
 preferences and installs shell integration; open a new terminal to activate it.
 Import your config with `qrlkit add <file-or-directory>`.

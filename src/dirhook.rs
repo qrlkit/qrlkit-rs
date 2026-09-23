@@ -14,26 +14,13 @@ pub fn validate(hook: &str) -> Result<()> {
 
 pub fn run(hook: &str, path: &Path) -> Result<(i32, Option<PathBuf>)> {
     let directory_file = tempfile::NamedTempFile::new()?;
-    let (shell, body) = if cfg!(windows) {
-        let expanded = expand(hook, "$qrlHookDirectory")?;
-        (
-            "pwsh",
-            format!(
-                "$qrlHookDirectory = $args[0]\n$qrlHookResult = $args[1]\ntry {{\n{expanded}\n}} finally {{\n[System.IO.File]::WriteAllText($qrlHookResult, (Get-Location).Path)\n}}"
-            ),
-        )
-    } else {
-        let expanded = expand(hook, "\"$qrl_hook_directory\"")?;
-        (
-            "bash",
-            format!(
-                "qrl_hook_directory=$1\nqrl_hook_result=$2\ntrap 'builtin pwd -P > \"$qrl_hook_result\"' EXIT\n{expanded}"
-            ),
-        )
-    };
+    let expanded = expand(hook, "\"$qrl_hook_directory\"")?;
+    let body = format!(
+        "qrl_hook_directory=$1\nqrl_hook_result=$2\ntrap 'builtin pwd -P > \"$qrl_hook_result\"' EXIT\n{expanded}"
+    );
     let status = crate::script::Script {
         body,
-        shell: shell.into(),
+        shell: "bash".into(),
         cwd: std::env::current_dir()?,
     }
     .run(&[

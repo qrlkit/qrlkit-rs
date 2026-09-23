@@ -177,19 +177,9 @@ fn collisions(ext: &'static str) {
 
 fn scripts(ext: &'static str) {
     let f = Fixture::new(ext);
-    let (shell, body, updated) = if cfg!(windows) {
-        (
-            "pwsh",
-            "Write-Output $PWD.Path\nforeach ($a in $args) { Write-Output \"<$a>\" }\nexit 7",
-            "Write-Output 'updated'",
-        )
-    } else {
-        (
-            "bash",
-            "pwd -P\nprintf '<%s>\\n' \"$@\"\nexit 7",
-            "printf 'updated\\n'",
-        )
-    };
+    let shell = "bash";
+    let body = "pwd -P\nprintf '<%s>\\n' \"$@\"\nexit 7";
+    let updated = "printf 'updated\\n'";
     f.write(json!({"tasks":{"nested":{"$run":body,"$shell":shell}}}));
     f.add();
     success(f.run(&["reload"]));
@@ -203,9 +193,7 @@ fn scripts(ext: &'static str) {
         let result = f.run(&args);
         assert_eq!(result.status.code(), Some(7), "{result:?}");
         assert_eq!(
-            String::from_utf8(result.stdout)
-                .unwrap()
-                .replace("\r\n", "\n"),
+            String::from_utf8(result.stdout).unwrap(),
             format!(
                 "{}\n<first value>\n<--title>\n<ø third>\n",
                 fs::canonicalize(f.dir.path()).unwrap().display()
@@ -370,7 +358,7 @@ fn alias_metadata(ext: &'static str) {
         f.state()["sources"][0]["entries"].as_array().unwrap().len(),
         1
     );
-    for shell in ["bash", "zsh", "fish", "powershell"] {
+    for shell in ["bash", "zsh", "fish"] {
         let output = success(f.run(&["__aliases", shell]));
         assert!(
             String::from_utf8(output.stdout)
@@ -593,7 +581,7 @@ fn automatic_root_commands_across_formats_and_lifecycle() {
         assert!(!upgraded.contains("qrl --config"));
         assert!(upgraded.contains("qrlkit()"));
         assert_eq!(upgraded.matches("__aliases zsh").count(), 1);
-        for shell in ["bash", "zsh", "fish", "powershell"] {
+        for shell in ["bash", "zsh", "fish"] {
             let functions =
                 String::from_utf8(success(f.run(&["__aliases", shell])).stdout).unwrap();
             assert!(functions.contains("--root 'docs' __lookup"), "{functions}");

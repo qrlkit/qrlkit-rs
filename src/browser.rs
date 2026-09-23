@@ -43,22 +43,6 @@ pub fn discover() -> Vec<Browser> {
                 add(name, root.join(executable));
             }
         }
-    } else if cfg!(target_os = "windows") {
-        for root in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"]
-            .iter()
-            .filter_map(std::env::var_os)
-        {
-            for (name, executable) in [
-                ("Google Chrome", "Google/Chrome/Application/chrome.exe"),
-                ("Microsoft Edge", "Microsoft/Edge/Application/msedge.exe"),
-                ("Firefox", "Mozilla Firefox/firefox.exe"),
-                ("Brave", "BraveSoftware/Brave-Browser/Application/brave.exe"),
-                ("Vivaldi", "Vivaldi/Application/vivaldi.exe"),
-                ("Opera", "Programs/Opera/opera.exe"),
-            ] {
-                add(name, PathBuf::from(&root).join(executable));
-            }
-        }
     } else {
         let mut paths: Vec<_> = std::env::var_os("PATH")
             .map(|p| std::env::split_paths(&p).collect())

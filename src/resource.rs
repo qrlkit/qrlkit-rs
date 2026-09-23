@@ -62,7 +62,7 @@ pub fn validate(value: &str) -> Result<()> {
             || value.starts_with("./")
             || value.starts_with("../")
             || Path::new(value).is_absolute(),
-        "Expected an HTTP(S) URL, browser-internal URL, or explicit path (~/, /, ./, ../, or a Windows absolute path): {value}"
+        "Expected an HTTP(S) URL, browser-internal URL, or explicit path (~/, /, ./, or ../): {value}"
     );
     Ok(())
 }

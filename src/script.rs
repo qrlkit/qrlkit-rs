@@ -16,8 +16,8 @@ impl Script {
             "Script must be nonempty and contain no NUL"
         );
         ensure!(
-            ["bash", "sh", "zsh", "powershell", "pwsh"].contains(&self.shell.as_str()),
-            "Unsupported $shell {}; use bash, sh, zsh, powershell, or pwsh",
+            ["bash", "sh", "zsh"].contains(&self.shell.as_str()),
+            "Unsupported $shell {}; use bash, sh, or zsh",
             self.shell
         );
         ensure!(
@@ -30,21 +30,7 @@ impl Script {
     pub fn run(&self, arguments: &[String]) -> Result<i32> {
         self.validate()?;
         let mut command = Command::new(&self.shell);
-        let mut script_file = None;
         match self.shell.as_str() {
-            "powershell" | "pwsh" => {
-                use std::io::Write;
-                let mut file = tempfile::Builder::new().suffix(".ps1").tempfile()?;
-                write!(
-                    file,
-                    "$ErrorActionPreference = 'Stop'\n$PSNativeCommandUseErrorActionPreference = $true\n{}\nif ($null -ne $LASTEXITCODE) {{ exit $LASTEXITCODE }}",
-                    self.body
-                )?;
-                command
-                    .args(["-NoLogo", "-NoProfile", "-File"])
-                    .arg(file.path());
-                script_file = Some(file);
-            }
             "bash" | "zsh" => {
                 command
                     .args(["-e", "-o", "pipefail", "-c"])
@@ -61,17 +47,9 @@ impl Script {
         let status = command
             .status()
             .with_context(|| format!("Cannot run {} in {}", self.shell, self.cwd.display()))?;
-        drop(script_file);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            Ok(status
-                .code()
-                .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)))
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(status.code().unwrap_or(1))
-        }
+        use std::os::unix::process::ExitStatusExt;
+        Ok(status
+            .code()
+            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)))
     }
 }
