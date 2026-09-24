@@ -190,11 +190,29 @@ impl State {
 }
 
 pub fn default_path() -> Result<PathBuf> {
-    let root = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|p| p.join(".config")))
-        .context("Cannot locate home directory; use --config <path>")?;
-    Ok(root.join("qrl/state.yaml"))
+    let home = dirs::home_dir().context("Cannot locate home directory; use --config <path>")?;
+    let root = state_root(&home);
+    Ok(root.join("qrlkit/state.yaml"))
+}
+
+fn state_root(home: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        home.join("Library/Application Support")
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("XDG_STATE_HOME")
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".local/state"))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        dirs::data_local_dir().unwrap_or_else(|| home.join(".local/state"))
+    }
 }
 
 #[cfg(test)]
