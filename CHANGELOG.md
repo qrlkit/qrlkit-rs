@@ -1,3 +1,6 @@
+## 0.3.1
+Remove compatibility code
+
 ### 0.3.0
 Move state from .config to .local
 
