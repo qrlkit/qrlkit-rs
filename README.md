@@ -96,10 +96,11 @@ Import your config with `qrlkit add <file-or-directory>`.
 | `qrlkit --help` | Show help |
 
 `nuke` keeps your original config files and installed shell integration.
-State stays in `~/.config/qrl/state.yaml`, or `$XDG_CONFIG_HOME/qrl/state.yaml`,
-for compatibility with existing installations. Use `qrlkit --config <path> …`
-for separate state. Put qrlkit options before resource keys; arguments after a
-script’s keys belong to the script.
+State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
+`~/.local/state/qrlkit/state.yaml`, or in
+`~/Library/Application Support/qrlkit/state.yaml` on macOS. Use
+`qrlkit --config <path> …` for separate state. Put qrlkit options before
+resource keys; arguments after a script’s keys belong to the script.
 
 ## Contributing
 

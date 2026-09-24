@@ -24,7 +24,7 @@ use store::State;
     about = "Locate websites, directories, and files from imported TOML, YAML, and JSON files"
 )]
 struct Cli {
-    /// Override ~/.config/qrl/state.yaml (or $XDG_CONFIG_HOME/qrl/state.yaml)
+    /// Override the default application state path
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[arg(long, hide = true)]
@@ -139,7 +139,7 @@ fn run() -> Result<i32> {
         print!("{}", shell::init(shell));
         return Ok(0);
     }
-    let path = cli.config.map(Ok).unwrap_or_else(store::default_path)?;
+    let path = cli.config.unwrap_or(store::default_path()?);
     // Reset must work even when state is corrupt or browser setup is incomplete.
     if matches!(command, Commands::Nuke) {
         let shell_changed = setup::remove_integration()?;
