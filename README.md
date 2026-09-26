@@ -113,21 +113,4 @@ cargo test --locked
 python3 scripts/test-terminal.py # macOS / Linux
 ```
 
-## Publishing
-
-The GitHub Actions workflow runs these checks on pull requests and pushes to
-`main`. On a successful push to `main`, it runs `cargo publish`.
-
-CI uses GitHub's Ubuntu 24.04 runner and its preinstalled stable Rust toolchain.
-Only the standard GitHub checkout/cache actions are used with readable major
-version tags. Dependabot proposes action updates weekly. Dependency and build
-caches reduce repeated compilation, and newer PR runs cancel superseded runs.
-Checks and publishing run in one job. The preinstalled Rust version follows
-GitHub's runner image updates.
-
-To enable publishing, create a crates.io API token and add it to the
-repository as an Actions secret named `CARGO_REGISTRY_TOKEN`. Bump the
-`version` field in `Cargo.toml` for each release. `cargo publish` rejects a
-version that has already been published.
-
 [MIT licensed](LICENSE).
