@@ -1,0 +1,34 @@
+
+# Use qk prep-release patch "Bump deps"
+[qk.prep-release]
+"$run" = """
+TYPE="${1:?Usage: ./release.sh <major|minor|patch> \"release note\"}"
+NOTE="${2:?Missing release note}"
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "<!> Nope. Uncommitted changes. <!>"
+  exit 1
+fi
+
+cargo set-version --bump "$TYPE"
+VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+
+case "$TYPE" in
+  major) HEADER="#" ;;
+  patch) HEADER="##" ;;
+  minor) HEADER="###" ;;
+  *) echo "Invalid type: $TYPE"; exit 1 ;;
+esac
+
+{
+  echo "$HEADER $VERSION"
+  echo "$NOTE"
+  echo
+  cat CHANGELOG.md 2>/dev/null || true
+} > CHANGELOG.md.tmp
+
+mv CHANGELOG.md.tmp CHANGELOG.md
+
+git add Cargo.toml Cargo.lock CHANGELOG.md
+git commit -m "release: v$VERSION"
+"""
