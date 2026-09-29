@@ -1,11 +1,12 @@
 ![](QRLs.png)
 
+[blog](https://qrlkit.github.io/qrlkit-web/)
+
 # Quick Resource Locators (QRLs)
 
 QRLs are small shortcuts you define for your key bookmarks, 
 files, directories, scripts etc. Simply type them into `.toml`, 
-`.yaml` or '.json' files and `qrlkit` converts them to cli-tools. 
-Its quick and personalizeable. 
+`.yaml` or `.json` files and `qrlkit` converts them to cli-tools:
 
 ```toml
 # resources.toml
