@@ -1,3 +1,6 @@
+## 0.5.1
+Update README
+
 ### 0.5.0
 *breaking:* Drop the $. Just filehook, dirhook, run and shell.
 
