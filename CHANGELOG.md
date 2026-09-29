@@ -1,3 +1,6 @@
+### 0.5.0
+*breaking:* Drop the $. Just filehook, dirhook, run and shell.
+
 ## 0.4.1
 Bump dependencies
 
