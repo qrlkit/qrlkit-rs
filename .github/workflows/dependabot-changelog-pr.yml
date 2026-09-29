@@ -1,4 +1,4 @@
-name: Prepare release PR after Dependabot merge
+name: Prepare changelog PR after Dependabot merge
 
 on:
   pull_request_target:
@@ -55,7 +55,7 @@ jobs:
           QRL_STATE: ${{ runner.temp }}/qrlkit-state.yaml
         run: qrlkit --config "$QRL_STATE" qk prep-release patch "Bump dependencies"
 
-      # The tag-release workflow creates the version tag after this PR is merged.
+      # The tag workflow creates the version tag after this PR is merged.
       - name: Push release branch
         run: |
           if git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
