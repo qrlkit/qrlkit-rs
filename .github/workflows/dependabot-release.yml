@@ -57,13 +57,28 @@ jobs:
 
       # The tag-release workflow creates the version tag after this PR is merged.
       - name: Push release branch
-        run: git -c push.followTags=false push origin "HEAD:refs/heads/$RELEASE_BRANCH"
+        run: |
+          if git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "Release branch $RELEASE_BRANCH already exists; reusing it."
+          else
+            git -c push.followTags=false push origin "HEAD:refs/heads/$RELEASE_BRANCH"
+          fi
 
       - name: Open release PR
         env:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           DEPENDABOT_PR: ${{ github.event.pull_request.number }}
         run: |
+          if gh pr list \
+            --base "$BASE_BRANCH" \
+            --head "$RELEASE_BRANCH" \
+            --state all \
+            --json number \
+            --jq 'length > 0' | grep -q true; then
+            echo "Release PR for $RELEASE_BRANCH already exists; nothing to do."
+            exit 0
+          fi
+
           gh pr create \
             --base "$BASE_BRANCH" \
             --head "$RELEASE_BRANCH" \
