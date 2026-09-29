@@ -1,7 +1,7 @@
 
 # Use qk prep-release patch "Bump deps"
 [qk.prep-release]
-"$run" = """
+run = """
 TYPE="${1:?Usage: ./release.sh <major|minor|patch> \"release note\"}"
 NOTE="${2:?Missing release note}"
 
