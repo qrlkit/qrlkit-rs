@@ -389,7 +389,11 @@ fn script_import_reload_and_namespace_lookup_never_execute() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("state.yaml");
     let source = dir.path().join("scripts.toml");
-    fs::write(&source, "[gh.make-pr]\n\"$run\" = 'echo ran > marker.txt'\n[gh.repo]\nqrlkit = 'https://example.com'\n").unwrap();
+    fs::write(
+        &source,
+        "[gh.make-pr]\nrun = 'echo ran > marker.txt'\n[gh.repo]\nqrlkit = 'https://example.com'\n",
+    )
+    .unwrap();
     assert!(
         run(&config, &["add", source.to_str().unwrap()])
             .status
@@ -410,14 +414,14 @@ fn invalid_script_definitions_leave_state_unchanged() {
     let before = fs::read(&config).unwrap();
     let source = dir.path().join("scripts.toml");
     for text in [
-        "[task]\n\"$run\" = 42",
-        "[task]\n\"$run\" = ''",
-        "[task]\n\"$shell\" = 'bash'",
-        "[task]\n\"$run\" = 'echo hi'\n\"$shell\" = 42",
-        "[task]\n\"$run\" = 'echo hi'\n\"$shell\" = 'unknown'",
-        "[task]\n\"$run\" = 'echo hi'\nchild = 'https://example.com'",
-        "[task]\n\"$run\" = 'echo hi'\n[task.child]\nurl = 'https://example.com'",
-        "\"$run\" = 'echo hi'",
+        "[task]\nrun = 42",
+        "[task]\nrun = ''",
+        "[task]\nshell = 'bash'",
+        "[task]\nrun = 'echo hi'\nshell = 42",
+        "[task]\nrun = 'echo hi'\nshell = 'unknown'",
+        "[task]\nrun = 'echo hi'\nchild = 'https://example.com'",
+        "[task]\nrun = 'echo hi'\n[task.child]\nurl = 'https://example.com'",
+        "run = 'echo hi'",
     ] {
         fs::write(&source, text).unwrap();
         let result = run(&config, &["add", source.to_str().unwrap()]);
@@ -439,8 +443,8 @@ fn scripts_use_source_directory_stream_output_stop_on_error_and_return_exit_code
         &source,
         r#"
 [gh.make-pr]
-"$shell" = "bash"
-"$run" = '''
+shell = "bash"
+run = '''
 cd ./subdir
 printf 'stdout-test\n'
 printf 'stderr-test\n' >&2
@@ -448,12 +452,12 @@ pwd -P > ../marker.txt
 exit 7
 '''
 [gh.fail]
-"$run" = '''
+run = '''
 false
 printf 'should not run' > failed.txt
 '''
 [gh.pipeline]
-"$run" = '''
+run = '''
 false | true
 printf 'should not run' > failed.txt
 '''
@@ -492,7 +496,11 @@ fn script_receives_stdin_but_not_outer_directory_channel() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("state.yaml");
     let source = dir.path().join("script.toml");
-    fs::write(&source, "[task]\n\"$run\" = '''test -z \"${QRL_CD_FILE+x}\"\nread -r line\nprintf '%s' \"$line\"'''\n").unwrap();
+    fs::write(
+        &source,
+        "[task]\nrun = '''test -z \"${QRL_CD_FILE+x}\"\nread -r line\nprintf '%s' \"$line\"'''\n",
+    )
+    .unwrap();
     assert!(
         run(&config, &["add", source.to_str().unwrap()])
             .status
@@ -527,7 +535,7 @@ fn directory_import_sets_up_shell_once_and_reload_detects_new_directory() {
     let startup = dir.path().join(".zshrc");
     fs::write(&startup, "export KEEP_ME=yes\n").unwrap();
     let source = dir.path().join("links.toml");
-    fs::write(&source, "[work]\nfuture = './future'\nfile = './links.toml'\nsite = 'https://example.com'\n[work.script]\n\"$run\" = 'echo test'\n").unwrap();
+    fs::write(&source, "[work]\nfuture = './future'\nfile = './links.toml'\nsite = 'https://example.com'\n[work.script]\nrun = 'echo test'\n").unwrap();
     assert!(
         run(&config, &["add", source.to_str().unwrap()])
             .status
@@ -606,13 +614,13 @@ fn scripts_reload_before_execution_and_receive_literal_arguments() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("state.yaml");
     let source = dir.path().join("source.toml");
-    fs::write(&source, "[task]\n'$run' = 'echo stale'").unwrap();
+    fs::write(&source, "[task]\nrun = 'echo stale'").unwrap();
     assert!(
         run(&config, &["add", source.to_str().unwrap()])
             .status
             .success()
     );
-    fs::write(&source, "[task]\n'$run' = '''printf '<%s>\\n' \"$@\"''' ").unwrap();
+    fs::write(&source, "[task]\nrun = '''printf '<%s>\\n' \"$@\"''' ").unwrap();
     for separator in [false, true] {
         let mut args = vec!["task"];
         if separator {
@@ -774,7 +782,7 @@ fn filehooks_persist_override_reload_and_preserve_literal_paths() {
     );
 
     assert!(
-        run(&config, &["set-filehook", "printf 'global:%s' file"])
+        run(&config, &["set-filehook", "printf 'global:%s' $file"])
             .status
             .success()
     );
@@ -791,13 +799,13 @@ fn filehooks_persist_override_reload_and_preserve_literal_paths() {
         &source,
         format!(
             r#"
-"$filehook" = "printf 'local:%s' file"
+filehook = "printf 'local:%s' $file"
 rootfile = './{filename}'
 [notes]
-"$filehook" = "printf 'group:%s' file"
+filehook = "printf 'group:%s' $file"
 today = './{filename}'
 [notes.raw]
-"$filehook" = ""
+filehook = ""
 today = './{filename}'
 [folders]
 here = './'
@@ -847,13 +855,13 @@ here = './'
 
     // Propagate hook exit codes and report unavailable programs.
     assert!(
-        run(&config, &["set-filehook", "sh -c 'exit 23' file"])
+        run(&config, &["set-filehook", "sh -c 'exit 23' $file"])
             .status
             .success()
     );
     assert_eq!(run(&config, &["notes", "today"]).status.code(), Some(23));
     assert!(
-        run(&config, &["set-filehook", "qrl-nonexistent-editor file"])
+        run(&config, &["set-filehook", "qrl-nonexistent-editor $file"])
             .status
             .success()
     );
@@ -883,7 +891,7 @@ fn directory_hooks_update_parent_shell_and_preserve_failure_status() {
     assert!(
         run(
             &config,
-            &["set-dirhook", "cd dir && printf 'hook:' && pwd -P"]
+            &["set-dirhook", "cd $dir && printf 'hook:' && pwd -P"]
         )
         .status
         .success()
@@ -920,7 +928,7 @@ fn directory_hooks_update_parent_shell_and_preserve_failure_status() {
     }
     assert!(!temp.path().join("INJECTED").exists());
     // Auto-reloaded local default and narrower override take precedence.
-    fs::write(&source, format!("\"$dirhook\" = \"cd dir && printf root\"\n[work]\n\"$dirhook\" = \"cd dir && exit 23\"\nrepo = \"./{name}\"\n")).unwrap();
+    fs::write(&source, format!("dirhook = \"cd $dir && printf root\"\n[work]\ndirhook = \"cd $dir && exit 23\"\nrepo = \"./{name}\"\n")).unwrap();
     for shell in ["bash", "zsh"] {
         if Command::new(shell).arg("--version").output().is_err() {
             continue;
@@ -933,7 +941,7 @@ fn directory_hooks_update_parent_shell_and_preserve_failure_status() {
     }
     fs::write(
         &source,
-        format!("[work]\n\"$dirhook\" = \"\"\nrepo = \"./{name}\"\n"),
+        format!("[work]\ndirhook = \"\"\nrepo = \"./{name}\"\n"),
     )
     .unwrap();
     assert_eq!(
@@ -967,21 +975,21 @@ fn filehooks_execute_shell_chains_pipes_redirects_and_local_overrides() {
             .success()
     );
     for (hook, status, expected) in [
-        ("cat file && printf done", 0, "hello\ndone"),
+        ("cat $file && printf done", 0, "hello\ndone"),
         (
-            "cat<file|tr a-z A-Z > result.txt && cat result.txt",
+            "cat<$file|tr a-z A-Z > result.txt && cat result.txt",
             0,
             "HELLO\n",
         ),
         (
-            "test -z \"${QRL_CD_FILE+x}\" && cat file; printf '%s' \"$(printf substituted)\"",
+            "test -z \"${QRL_CD_FILE+x}\" && cat $file; printf '%s' \"$(printf substituted)\"",
             0,
             "hello\nsubstituted",
         ),
-        ("cat file && false && printf skipped", 1, "hello\n"),
-        ("false || cat file", 0, "hello\n"),
-        ("cat file && sh -c 'exit 23'", 23, "hello\n"),
-        ("cat file | sh -c 'cat >/dev/null; exit 17'", 17, ""),
+        ("cat $file && false && printf skipped", 1, "hello\n"),
+        ("false || cat $file", 0, "hello\n"),
+        ("cat $file && sh -c 'exit 23'", 23, "hello\n"),
+        ("cat $file | sh -c 'cat >/dev/null; exit 17'", 17, ""),
     ] {
         assert!(run(&config, &["set-filehook", hook]).status.success());
         let output = run(&config, &["notes", "item"]);
@@ -992,7 +1000,7 @@ fn filehooks_execute_shell_chains_pipes_redirects_and_local_overrides() {
     // A local hook also supports shell syntax and reloads without re-importing.
     fs::write(
         &source,
-        format!("\"$filehook\" = \"cat file && printf local\"\n{resource}"),
+        format!("filehook = \"cat $file && printf local\"\n{resource}"),
     )
     .unwrap();
     let output = run(&config, &["notes", "item"]);

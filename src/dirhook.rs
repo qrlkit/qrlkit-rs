@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use std::path::{Path, PathBuf};
 
 fn expand(hook: &str, replacement: &str) -> Result<String> {
-    crate::hook::expand(hook, "dir", replacement)
+    crate::hook::expand(hook, "$dir", replacement)
 }
 
 pub fn validate(hook: &str) -> Result<()> {
@@ -55,19 +55,19 @@ mod tests {
     #[test]
     fn only_unquoted_complete_placeholders_are_replaced() {
         assert_eq!(
-            expand("cd dir&&printf '%s' 'dir'", "PATH").unwrap(),
+            expand("cd $dir&&printf '%s' 'dir'", "PATH").unwrap(),
             "cd PATH&&printf '%s' 'dir'"
         );
         assert_eq!(
-            expand("echo directory; cd dir", "PATH").unwrap(),
+            expand("echo directory; cd $dir", "PATH").unwrap(),
             "echo directory; cd PATH"
         );
         for bad in [
             " ",
             "cd directory",
-            "cd 'dir'",
+            "cd '$dir'",
             "cd dir\n",
-            "cd dir\\",
+            "cd $dir\\",
             "cd dir && echo '",
         ] {
             assert!(validate(bad).is_err(), "{bad}");

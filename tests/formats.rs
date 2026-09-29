@@ -110,10 +110,10 @@ fn invalid_resources(ext: &'static str) {
         json!({"bad key":"https://example.com"}),
         json!({"x":"javascript:alert(1)"}),
         json!({"x":"relative/path"}),
-        json!({"x":{"$run":""}}),
-        json!({"x":{"$shell":"bash"}}),
-        json!({"x":{"$run":"echo hi","child":"https://example.com"}}),
-        json!({"x":{"$run":"echo hi","$shell":"unknown"}}),
+        json!({"x":{"run":""}}),
+        json!({"x":{"shell":"bash"}}),
+        json!({"x":{"run":"echo hi","child":"https://example.com"}}),
+        json!({"x":{"run":"echo hi","shell":"unknown"}}),
     ] {
         f.write(value.clone());
         let result = f.run(&["reload"]);
@@ -180,7 +180,7 @@ fn scripts(ext: &'static str) {
     let shell = "bash";
     let body = "pwd -P\nprintf '<%s>\\n' \"$@\"\nexit 7";
     let updated = "printf 'updated\\n'";
-    f.write(json!({"tasks":{"nested":{"$run":body,"$shell":shell}}}));
+    f.write(json!({"tasks":{"nested":{"run":body,"shell":shell}}}));
     f.add();
     success(f.run(&["reload"]));
     assert!(!f.run(&["tasks"]).status.success()); // Browsing never auto-runs a child.
@@ -200,7 +200,7 @@ fn scripts(ext: &'static str) {
             )
         );
     }
-    f.write(json!({"tasks":{"nested":{"$run":updated,"$shell":shell}}}));
+    f.write(json!({"tasks":{"nested":{"run":updated,"shell":shell}}}));
     assert_eq!(
         String::from_utf8(success(f.run(&["tasks", "nested"])).stdout)
             .unwrap()
@@ -284,7 +284,7 @@ format_suite!(json, "json");
 #[test]
 fn yaml_literal_and_folded_multiline_scripts_preserve_semantics() {
     let f = Fixture::new("yaml");
-    fs::write(&f.source, "scripts:\n  literal:\n    $run: |\n      echo first\n      echo second\n  folded:\n    $run: >-\n      echo first\n      second\n").unwrap();
+    fs::write(&f.source, "scripts:\n  literal:\n    run: |\n      echo first\n      echo second\n  folded:\n    run: >-\n      echo first\n      second\n").unwrap();
     f.add();
     let entries = f.state()["sources"][0]["entries"]
         .as_array()
@@ -299,7 +299,7 @@ fn json_escapes_unicode_and_multiline_script_survive_import() {
     let f = Fixture::new("json");
     fs::write(
         &f.source,
-        r#"{"scripts":{"caf\u00e9":{"$run":"echo \"hello\"\necho C:\\work\n"}}}"#,
+        r#"{"scripts":{"caf\u00e9":{"run":"echo \"hello\"\necho C:\\work\n"}}}"#,
     )
     .unwrap();
     f.add();
@@ -412,7 +412,7 @@ fn shell_alias_forwards_arguments_and_changes_directory_with_scoped_names() {
     f.write(
         json!({"alias":{"name":"qrl-test-tools"}, "files":{"one":"./file.txt"},
         "dirs":{"project":project.to_str().unwrap()},
-        "tasks":{"run":{"$run":"printf '<%s>\\n' \"$@\"","$shell":"bash"}}}),
+        "tasks":{"command":{"run":"printf '<%s>\\n' \"$@\"","shell":"bash"}}}),
     );
     f.add();
     let other = f.dir.path().join("other.json");
@@ -436,7 +436,7 @@ fn shell_alias_forwards_arguments_and_changes_directory_with_scoped_names() {
         let init = String::from_utf8(success(f.run(&["init", shell])).stdout).unwrap();
         let aliases = String::from_utf8(success(f.run(&["__aliases", shell])).stdout).unwrap();
         let body = format!(
-            "{init}\n{aliases}\nqrl-test-tools dirs project || exit\nqrl-test-tools files one || exit\nqrl-test-tools tasks run 'hello world' --title || exit\nif qrl-test-tools unrelated; then exit 99; fi\n"
+            "{init}\n{aliases}\nqrl-test-tools dirs project || exit\nqrl-test-tools files one || exit\nqrl-test-tools tasks command 'hello world' --title || exit\nif qrl-test-tools unrelated; then exit 99; fi\n"
         );
         let result = Command::new(shell)
             .args(["-c", &body])
@@ -610,7 +610,7 @@ fn automatic_commands_execute_in_shell_with_scoping_renames_and_conflicts() {
     fs::write(project.join("guide.txt"), "").unwrap();
     f.write(json!({
         "docs":{"guide":"./guide.txt"},
-        "notes":{"$run":"printf '<%s>\\n' \"$@\""},
+        "notes":{"run":"printf '<%s>\\n' \"$@\""},
         "qrl-test-jump":project.to_str().unwrap(),
         "echo":"./guide.txt",
         "bad;name":"./guide.txt"

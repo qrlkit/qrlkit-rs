@@ -47,7 +47,7 @@ enum Commands {
     Reload,
     /// Choose the default browser
     SetBrowser,
-    /// Set the default file shell command; use an unquoted file word for the path
+    /// Set the default file shell command; use an unquoted $file placeholder for the path
     SetFilehook {
         #[arg(required_unless_present = "clear", conflicts_with = "clear")]
         command: Option<String>,
@@ -55,7 +55,7 @@ enum Commands {
         #[arg(long)]
         clear: bool,
     },
-    /// Set the default directory shell command; dir stands for the directory path
+    /// Set the default directory shell command; use an unquoted $dir placeholder for the path
     SetDirhook {
         #[arg(required_unless_present = "clear", conflicts_with = "clear")]
         command: Option<String>,
