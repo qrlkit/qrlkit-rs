@@ -113,37 +113,32 @@ fn flatten(
 ) -> Result<()> {
     match value {
         Node::Table(table) => {
-            let filehook = match table.get("$filehook") {
+            let filehook = match table.get("filehook") {
                 Some(value) => {
-                    let hook = value.as_str().context("$filehook must be a string")?;
+                    let hook = value.as_str().context("filehook must be a string")?;
                     crate::filehook::validate(hook)?;
                     Some(hook)
                 }
                 None => filehook,
             };
-            let dirhook = match table.get("$dirhook") {
+            let dirhook = match table.get("dirhook") {
                 Some(value) => {
-                    let hook = value.as_str().context("$dirhook must be a string")?;
+                    let hook = value.as_str().context("dirhook must be a string")?;
                     crate::dirhook::validate(hook)?;
                     Some(hook)
                 }
                 None => dirhook,
             };
-            if let Some(run) = table.get("$run") {
+            if let Some(run) = table.get("run") {
+                ensure!(!key.is_empty(), "run must belong to a named resource table");
                 ensure!(
-                    !key.is_empty(),
-                    "$run must belong to a named resource table"
-                );
-                ensure!(
-                    table
-                        .keys()
-                        .all(|k| matches!(k.as_str(), "$run" | "$shell")),
+                    table.keys().all(|k| matches!(k.as_str(), "run" | "shell")),
                     "Script {} cannot contain child resources or unknown settings",
                     key.join(" ")
                 );
-                let body = run.as_str().context("$run must be a string")?.to_owned();
-                let shell = match table.get("$shell") {
-                    Some(value) => value.as_str().context("$shell must be a string")?,
+                let body = run.as_str().context("run must be a string")?.to_owned();
+                let shell = match table.get("shell") {
+                    Some(value) => value.as_str().context("shell must be a string")?,
                     None => "bash",
                 }
                 .to_owned();
@@ -163,12 +158,12 @@ fn flatten(
                 return Ok(());
             }
             ensure!(
-                !table.contains_key("$shell"),
-                "$shell requires $run at {}",
+                !table.contains_key("shell"),
+                "shell requires run at {}",
                 key.join(" ")
             );
             for (segment, child) in table {
-                if matches!(segment.as_str(), "$filehook" | "$dirhook") {
+                if matches!(segment.as_str(), "filehook" | "dirhook") {
                     continue;
                 }
                 ensure!(valid_segment(segment), "Invalid key segment: {segment:?}");
@@ -273,15 +268,11 @@ mod tests {
     #[test]
     fn script_roots_rename_and_reload_without_exposing_metadata_keys() {
         let dir = tempfile::tempdir().unwrap();
-        let mut source = fixture(
-            dir.path(),
-            "script.toml",
-            "[nuke]\n\"$run\" = 'echo first'\n",
-        );
+        let mut source = fixture(dir.path(), "script.toml", "[nuke]\nrun = 'echo first'\n");
         assert_eq!(source.entries[0].key, ["nuke"]);
         assert!(collision(std::slice::from_ref(&source)).is_some());
         rename(&mut source, "nuke", "cleanup").unwrap();
-        fs::write(&source.path, "[nuke]\n\"$run\" = 'echo updated'\n").unwrap();
+        fs::write(&source.path, "[nuke]\nrun = 'echo updated'\n").unwrap();
         let loaded = reload(&[source]).unwrap();
         assert_eq!(loaded[0].entries[0].key, ["cleanup"]);
         let script = loaded[0].entries[0].script.as_ref().unwrap();
@@ -452,15 +443,15 @@ mod adapter_tests {
         for (ext, text) in [
             (
                 "toml",
-                "\"$filehook\" = 'nvim file'\n[notes]\nx = './{name}'\n[notes.raw]\n\"$filehook\" = ''\nx = './raw'",
+                "filehook = 'nvim $file'\n[notes]\nx = './{name}'\n[notes.raw]\nfilehook = ''\nx = './raw'",
             ),
             (
                 "yaml",
-                "'$filehook': nvim file\nnotes:\n  x: './{name}'\n  raw:\n    '$filehook': ''\n    x: ./raw",
+                "filehook: nvim $file\nnotes:\n  x: './{name}'\n  raw:\n    filehook: ''\n    x: ./raw",
             ),
             (
                 "json",
-                r#"{"$filehook":"nvim file","notes":{"x":"./{name}","raw":{"$filehook":"","x":"./raw"}}}"#,
+                r#"{"filehook":"nvim $file","notes":{"x":"./{name}","raw":{"filehook":"","x":"./raw"}}}"#,
             ),
         ] {
             let path = dir.path().join(format!("hooks.{ext}"));
@@ -468,15 +459,15 @@ mod adapter_tests {
             let source = read(&path, BTreeMap::new()).unwrap();
             assert_eq!(source.entries.len(), 2);
             let templated = source.entries.iter().find(|e| e.url == "./{name}").unwrap();
-            assert_eq!(templated.filehook.as_deref(), Some("nvim file"));
+            assert_eq!(templated.filehook.as_deref(), Some("nvim $file"));
             let raw = source.entries.iter().find(|e| e.url == "./raw").unwrap();
             assert_eq!(raw.filehook.as_deref(), Some(""));
         }
         let path = dir.path().join("invalid.toml");
         for text in [
-            "\"$filehook\" = 'nvim'\nx = './file'",
-            "[\"$filehook\"]\nx = './file'",
-            "[script]\n\"$run\" = 'echo hi'\n\"$filehook\" = 'nvim file'",
+            "filehook = 'nvim'\nx = './file'",
+            "[filehook]\nx = './file'",
+            "[script]\nrun = 'echo hi'\nfilehook = 'nvim file'",
         ] {
             fs::write(&path, text).unwrap();
             assert!(read(&path, BTreeMap::new()).is_err());
@@ -489,15 +480,15 @@ mod adapter_tests {
         for (extension, text) in [
             (
                 "toml",
-                "\"$dirhook\" = 'cd dir && pwd'\n[work]\nrepo = './repo'\n[work.quiet]\n\"$dirhook\" = ''\nrepo = './repo'",
+                "dirhook = 'cd $dir && pwd'\n[work]\nrepo = './repo'\n[work.quiet]\ndirhook = ''\nrepo = './repo'",
             ),
             (
                 "yaml",
-                "'$dirhook': cd dir && pwd\nwork:\n  repo: ./repo\n  quiet:\n    '$dirhook': ''\n    repo: ./repo",
+                "dirhook: cd $dir && pwd\nwork:\n  repo: ./repo\n  quiet:\n    dirhook: ''\n    repo: ./repo",
             ),
             (
                 "json",
-                r#"{"$dirhook":"cd dir && pwd","work":{"repo":"./repo","quiet":{"$dirhook":"","repo":"./repo"}}}"#,
+                r#"{"dirhook":"cd $dir && pwd","work":{"repo":"./repo","quiet":{"dirhook":"","repo":"./repo"}}}"#,
             ),
         ] {
             let path = dir.path().join(format!("hooks.{extension}"));
@@ -508,7 +499,7 @@ mod adapter_tests {
                 assert_eq!(
                     entry.dirhook.as_deref(),
                     Some(if entry.key.len() == 2 {
-                        "cd dir && pwd"
+                        "cd $dir && pwd"
                     } else {
                         ""
                     })
@@ -517,9 +508,9 @@ mod adapter_tests {
         }
         let path = dir.path().join("bad.toml");
         for text in [
-            "\"$dirhook\" = 'cd'\nx = './repo'",
-            "[\"$dirhook\"]\nx = './repo'",
-            "[script]\n\"$run\" = 'echo hi'\n\"$dirhook\" = 'cd dir'",
+            "dirhook = 'cd'\nx = './repo'",
+            "[dirhook]\nx = './repo'",
+            "[script]\nrun = 'echo hi'\ndirhook = 'cd dir'",
         ] {
             fs::write(&path, text).unwrap();
             assert!(read(&path, BTreeMap::new()).is_err());
@@ -562,7 +553,7 @@ mod adapter_tests {
         let loaded = reload(&sources).unwrap();
         assert!(collision(&loaded).is_none());
         assert_eq!(loaded[1].entries[0].key, ["yaml-web", "new"]);
-        fs::write(&sources[2].path, r#"{"web":{"$shell":"bash"}}"#).unwrap();
+        fs::write(&sources[2].path, r#"{"web":{"shell":"bash"}}"#).unwrap();
         assert!(reload(&sources).is_err());
     }
 }

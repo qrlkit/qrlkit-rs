@@ -12,7 +12,7 @@ paths:
 scripts:
   # qrlkit scripts greet "friend"
   greet:
-    $run: |
+    run: |
       printf 'Hello, %s!\n' "$1"
       printf 'From %s\n' "$PWD"
-    $shell: bash
+    shell: bash

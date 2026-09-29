@@ -98,13 +98,13 @@ with tempfile.TemporaryDirectory(prefix="qrl-init-test-") as directory:
     run_init(root, BROWSER + [
         ("Choose shell:", b"unsupported\r"),
         ("Unsupported shell.", b"fish\r"),
-        ("Filehook command", b"cat file\r"),
-        ("Dirhook command", b"cd dir && pwd\r"),
+        ("Filehook command", b"cat $file\r"),
+        ("Dirhook command", b"cd $dir && pwd\r"),
     ])
     state = (root / "state.yaml").read_text()
     assert "shell: fish" in state
-    assert "filehook: cat file" in state
-    assert "dirhook: cd dir && pwd" in state
+    assert "filehook: cat $file" in state
+    assert "dirhook: cd $dir && pwd" in state
     assert "function qrlkit" in (root / "fish/config.fish").read_text()
 
     # Cancellation must not replace existing settings or startup files.

@@ -17,7 +17,7 @@ repo = "~/work/project"
 today = "~/notes/today.txt"
 
 [notes.edit]
-"$run" = 'nvim ~/notes/today.txt'
+run = 'nvim ~/notes/today.txt'
 ```
 
 Import the file once:
@@ -57,9 +57,20 @@ qrlkit init
 Choose an installed browser, then a supported shell, filehook command, and
 dirhook command. Press Enter for the detected shell (Bash if detection fails),
 printing file paths, and changing directories.
-Custom hooks use the unquoted `file` or `dir` placeholder. Setup saves your
+Custom hooks use the unquoted `$file` or `$dir` placeholder. Setup saves your
 preferences and installs shell integration; open a new terminal to activate it.
 Import your config with `qrlkit add <file-or-directory>`.
+
+Source-file metadata uses clean, unquoted keys:
+
+```toml
+filehook = 'nvim $file'
+dirhook = 'cd $dir'
+
+[tools.build]
+run = 'cargo build'
+shell = 'bash'
+```
 
 ## Features
 

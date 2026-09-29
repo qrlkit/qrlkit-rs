@@ -17,7 +17,7 @@ impl Script {
         );
         ensure!(
             ["bash", "sh", "zsh"].contains(&self.shell.as_str()),
-            "Unsupported $shell {}; use bash, sh, or zsh",
+            "Unsupported shell {}; use bash, sh, or zsh",
             self.shell
         );
         ensure!(

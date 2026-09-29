@@ -231,11 +231,11 @@ pub fn interactive(state: &mut State, config: &Path) -> Result<()> {
         }
     };
     let filehook = choose_hook(
-        "Filehook command (use file, e.g. nvim file; empty to print path)",
+        "Filehook command (use $file, e.g. nvim $file; empty to print path)",
         crate::filehook::validate,
     )?;
     let dirhook = choose_hook(
-        "Dirhook command (use dir, e.g. cd dir; empty to change directory)",
+        "Dirhook command (use $dir, e.g. cd $dir; empty to change directory)",
         crate::dirhook::validate,
     )?;
     let startup_path = startup(&shell)?;
