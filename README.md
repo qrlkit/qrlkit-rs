@@ -1,4 +1,6 @@
-![](QRLs.png)
+<p align="center">
+  <img src="QRLs.png" alt="QRLs" width="500">
+</p>
 
 [![CI](https://github.com/qrlkit/qrlkit-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/qrlkit/qrlkit-rs/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/qrlkit.svg)](https://crates.io/crates/qrlkit)
@@ -7,33 +9,71 @@
 
 # Quick Resource Locators (QRLs)
 
-QRLs are small shortcuts you define for your key bookmarks, 
-files, directories, scripts etc. Simply type them into `.toml`, 
-`.yaml` or `.json` files and `qrlkit` converts them to cli-tools:
+Basic tool to keep your key resources quickly available at your fingertips. 
+
+Define a config with urls, dirs, scripts/snippets, files etc:  
 
 ```toml
-# resources.toml
-[docs]
-handbook = "https://example.com/handbook"
-repo = "~/work/project"
+# QRLs.toml
 
-[notes]
-today = "~/notes/today.txt"
+[repos]
+rs = "https://github.com/qrlkit/qrlkit-rs"
+web = "https://github.com/qrlkit/qrlkit-web"
 
-[notes.edit]
-run = 'nvim ~/notes/today.txt'
+[repos.prs]
+rs = "https://github.com/qrlkit/qrlkit-rs"
+web = "https://github.com/qrlkit/qrlkit-web/pulls"
+
+[qk.check]
+run = """
+cargo fmt
+cargo test 
+cargo clippy
+python3 "~dev/qrlkit-rs/test/integration.py"
+"""
+shell = "zsh"
+
+[qk.dirs]
+rs = "~/dev/qrlkit-rs"
+web = "~/dev/qrlkit-web"
+dirhook = "cd $dir && tree -L 1"
+
+[files]
+cargo-toml = "~/dev/qrlkit-rs/Cargo.toml"
+readme = "~/dev/qrlkit-rs/README.md"
+changelog = "~/dev/qrlkit-web/CHANGELOG.md"
+filehook = "nvim $file"
 ```
 
-Import the file once:
+Import the file with `qrlkit add` and turn it in to a lightweight CLI tool:
 
 ```sh
-qrlkit add resources.toml
+$ qrlkit add QRLs.toml
+
 # Open a new terminal, then:
-docs handbook       # Opens the URL
-docs repo           # Changes your working directory
-notes today         # Prints the absolute file path
-notes edit          # Runs the script
+
+repos rs            # Opens gh repo with browser
+repos prs web       # Opens prs for gh page in browser
+qk check            # Run standard rust checks and tests in chosen shell
+qk dirs web         # cd into dir and see content via custom dirhook
+qk files readme     # open qrlkit-rs README.md in neovim
+
 ```
+
+The tool is built to 1) optimize for adaptability to *your* flow:
+
+- `qrlkit add <x>` accepts any file name and supports toml, json and yaml configs
+- Set hooks to customize behavior for files and dirs in each config and/or globally
+- Define your own CLI behavior:
+    - By setting config keys you decide if it's `logs live nginx` or `logs nginx live`. 
+    - Name tools and paths what you want
+- Multiple configs are supported at once. Make one for your projects, your machine or your team/org
+
+and 2) have as little friction as possible:
+
+- If you forget something run `qrlkit` to run any imported tool
+- `qrlkit` will suggest the next keys if you get stuck
+
 
 ## Install
 
@@ -42,62 +82,71 @@ notes edit          # Runs the script
 ```
 git clone git@github.com:qrlkit/qrlkit-rs.git
 cd qrlkit-rs
-cargo install --path . 
+cargo install --path .
+
+# Then start init to set the defaults you want (shell, browser etc)
+qrlkit init 
 ```
 
-*Step 2* Write a toml, yaml or json config
+*Step 2* Write some config you want 
+
+*Step 3* Add the config
 
 ```
-[repos]
-qrlkit = 'https://github.com/qrlkit/qrlkit-rs'
+qrlkit add shortcuts.toml
 ```
 
-*Step 3* Run interactive setup
+## Version 1 Roadmap
 
-```
-qrlkit init
-```
+**Version 1 happens January 2027. Until then expect everything to break. 
+Current version is 0.5.1 but any minor version can ship with a breaking change until v1.**
 
-Choose an installed browser, then a supported shell, filehook command, and
-dirhook command. Press Enter for the detected shell (Bash if detection fails),
-printing file paths, and changing directories.
-Custom hooks use the unquoted `$file` or `$dir` placeholder. Setup saves your
-preferences and installs shell integration; open a new terminal to activate it.
-Import your config with `qrlkit add <file-or-directory>`.
+### Version 1
 
-Source-file metadata uses clean, unquoted keys:
+#### `qrlkit` ####
 
-```toml
-filehook = 'nvim $file'
-dirhook = 'cd $dir'
+- [x] init
+- [x] add <file | dir path>
+    - [x] multiple configs at once
+    - [x] graceful collisions
+- [x] qrlkit [keys…]
+- [x] ls
+- [x] rm <path>
+- [x] reload
+- [x] set-browser
+- [x] set-filehook <command>
+- [x] set-dirhook <command>
+- [x] nuke
 
-[tools.build]
-run = 'cargo build'
-shell = 'bash'
-```
+#### config ####
 
-## Features
+- [x] yaml, json and toml
+- [x] nested keys
+- [x] URLs
+- [x] files and dirs
+- [x] shell scripts 
+- [x] variables in paths, urls, scripts
+- [x] file hooks
+- [x] dir hooks
+- [ ] browser hooks
+- [x] run shell scripts
 
-- Keys are turned in cli-tool commands
-- Supports toml, yaml, json
-- Open browser settings and extension management using internal URLs.
+#### package managers ####
 
-- Defaults:
-    - URLs opens in default browser
-    - Dir paths are cd'd into
-    - File paths are printed in stdout
-    - Scripts are executed with bash
+- [x] `cargo install`
+- [ ] `npm install`
 
-- Customize filehook, dirhook, shell and browser
-- Urls and paths can be modified with user inputs
-- Scripts can also use inputs
-- Name collisions are handled by qrlkit cli on import 
+#### Raw install #### 
+
+- [x] linux and macos binaries released on GitHub
+- [ ] install.sh 
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `qrlkit [keys…]` | Browse or open a resource |
+| `qrlkit --config <path> …` | Use a separate state file for debugging |
 | `qrlkit add <file-or-directory>` | Register configs and set up root commands |
 | `qrlkit ls` | List registered config files |
 | `qrlkit rm <path>` | Unregister a config; keep the file |
@@ -114,8 +163,7 @@ shell = 'bash'
 State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 `~/.local/state/qrlkit/state.yaml`, or in
 `~/Library/Application Support/qrlkit/state.yaml` on macOS. Use
-`qrlkit --config <path> …` for separate state. Put qrlkit options before
-resource keys; arguments after a script’s keys belong to the script.
+`qrlkit --config <path> …` for separate state (usefull for debugging). 
 
 ## Contributing
 
