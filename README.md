@@ -1,4 +1,6 @@
-![](QRLs.png)
+<p align="center">
+  <img src="QRLs.png" alt="QRLs" width="500">
+</p>
 
 [![CI](https://github.com/qrlkit/qrlkit-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/qrlkit/qrlkit-rs/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/qrlkit.svg)](https://crates.io/crates/qrlkit)
@@ -7,7 +9,7 @@
 
 # Quick Resource Locators (QRLs)
 
-Basic tool to keep your key resources quickly availble at your fingertips. 
+Basic tool to keep your key resources quickly available at your fingertips. 
 
 Define a config with urls, dirs, scripts/snippets, files etc:  
 
@@ -57,13 +59,13 @@ qk files readme     # open qrlkit-rs README.md in neovim
 
 ```
 
-Tool is build to optimize for adaptability to *your* flow so:
+The tool is built to optimize for adaptability to *your* flow so:
 
 - `qrlkit add <x>` accepts any file name and supports toml, json and yaml configs
 - Set custom files and dir hooks in each config and use `--filehook` 
-`--dirhook` `---browser` to global defaults
-- Define your own cli behavior:
-    - By settings config keys you decide if its `logs live nginx` or `logs nginx live`. 
+`--dirhook` `--browser` to global defaults
+- Define your own CLI behavior:
+    - By setting config keys you decide if it's `logs live nginx` or `logs nginx live`. 
     - Name tools and paths what you want
 - Multiple configs are supported at once. Make one for your projects, your machine or your team/org
 
@@ -101,7 +103,15 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 - [x] init
 - [x] add <file | dir path>
     - [x] multiple configs at once
-    - [x] gracefull collisions
+    - [x] graceful collisions
+- [x] qrlkit [keys…]
+- [x] ls
+- [x] rm <path>
+- [x] reload
+- [x] set-browser
+- [x] set-filehook <command>
+- [x] set-dirhook <command>
+- [x] nuke
 
 #### config ####
 
@@ -110,19 +120,20 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 - [x] URLs
 - [x] files and dirs
 - [x] shell scripts 
+- [x] variables in paths, urls, scripts
 - [x] file hooks
 - [x] dir hooks
 - [ ] browser hooks
-- [ ] Run shell scripts 
+- [x] run shell scripts
 
-#### packagemanagers ####
+#### package managers ####
 
 - [x] `cargo install`
 - [ ] `npm install`
 
 #### Raw install #### 
 
-- [x] linux and macos binaries released on github
+- [x] linux and macos binaries released on GitHub
 - [ ] install.sh 
 
 ## Commands
