@@ -1,3 +1,6 @@
+## 0.5.2
+Update Github Actions with build matrix
+
 ## 0.5.1
 Update README
 
