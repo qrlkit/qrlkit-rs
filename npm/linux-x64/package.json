@@ -1,6 +1,5 @@
 {
   "name": "qrlkit-linux-x64",
-  "version": "0.5.1",
   "description": "qrlkit native binary for linux-x64",
   "license": "MIT",
   "repository": {
