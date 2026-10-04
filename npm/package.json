@@ -1,6 +1,5 @@
 {
   "name": "qrlkit",
-  "version": "0.5.1",
   "description": "Quick Resource Locator CLI",
   "bin": {
     "qrlkit": "bin/qrlkit.cjs"
@@ -8,12 +7,7 @@
   "files": [
     "bin/qrlkit.cjs"
   ],
-  "optionalDependencies": {
-    "qrlkit-linux-x64": "0.5.1",
-    "qrlkit-linux-arm64": "0.5.1",
-    "qrlkit-darwin-x64": "0.5.1",
-    "qrlkit-darwin-arm64": "0.5.1"
-  },
+  "optionalDependencies": {},
   "os": [
     "linux",
     "darwin"

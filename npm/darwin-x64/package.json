@@ -1,6 +1,5 @@
 {
   "name": "qrlkit-darwin-x64",
-  "version": "0.5.1",
   "description": "qrlkit native binary for darwin-x64",
   "license": "MIT",
   "repository": {
