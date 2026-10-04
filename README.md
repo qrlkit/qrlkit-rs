@@ -2,10 +2,8 @@
 
 [![CI](https://github.com/qrlkit/qrlkit-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/qrlkit/qrlkit-rs/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/qrlkit.svg)](https://crates.io/crates/qrlkit)
-[![Documentation](https://docs.rs/qrlkit/badge.svg)](https://docs.rs/qrlkit)
+[![Documentation](https://img.shields.io/badge/docs-qrlkit.github.io-blue.svg)](https://qrlkit.github.io/qrlkit-web/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-[blog](https://qrlkit.github.io/qrlkit-web/)
 
 # Quick Resource Locators (QRLs)
 
