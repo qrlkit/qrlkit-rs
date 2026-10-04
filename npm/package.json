@@ -1,0 +1,32 @@
+{
+  "name": "qrlkit",
+  "version": "0.5.1",
+  "description": "Quick Resource Locator CLI",
+  "bin": {
+    "qrlkit": "bin/qrlkit.cjs"
+  },
+  "files": [
+    "bin/qrlkit.cjs",
+    "platforms.cjs"
+  ],
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qrlkit/qrlkit-rs.git"
+  },
+  "homepage": "https://github.com/qrlkit/qrlkit-rs",
+  "bugs": {
+    "url": "https://github.com/qrlkit/qrlkit-rs/issues"
+  }
+}
