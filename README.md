@@ -167,13 +167,8 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 
 ## Contributing
 
-Built with Rust and Ratatui. To check a change:
+Contributions are welcome! 
+Either drop a PR or create an issue. 
 
-```sh
-cargo fmt --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked
-python3 scripts/test-terminal.py # macOS / Linux
-```
 
 [MIT licensed](LICENSE).
