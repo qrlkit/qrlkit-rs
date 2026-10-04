@@ -1,3 +1,6 @@
+### 0.5.5
+- Fix bug in CI
+
 ### 0.5.4
 - Updates to CI npm releases
 
