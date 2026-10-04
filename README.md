@@ -34,7 +34,7 @@ shell = "zsh"
 [qk.dirs]
 rs = "~/dev/qrlkit-rs"
 web = "~/dev/qrlkit-web"
-dirhook = "cd $dir && tree -L 1 && 
+dirhook = "cd $dir && tree -L 1"
 
 [files]
 cargo-toml = "~/dev/qrlkit-rs/Cargo.toml"
@@ -87,8 +87,6 @@ qrlkit init
 
 ```
 qrlkit add shortcuts.toml
-```
-
 ```
 
 ## Version 1 Roadmap
