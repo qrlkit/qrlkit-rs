@@ -28,7 +28,7 @@ cargo fmt
 cargo test 
 cargo clippy
 python3 "~dev/qrlkit-rs/test/integration.py"
-""
+"""
 shell = "zsh"
 
 [qk.dirs]
