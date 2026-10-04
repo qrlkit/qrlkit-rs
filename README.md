@@ -45,10 +45,11 @@ changelog = "~/dev/qrlkit-web/CHANGELOG.md"
 filehook = "nvim $file"
 ```
 
-Import the file once:
+Import the file with `qrlkit add` and turn it in to a lightweight CLI tool:
 
 ```sh
-qrlkit add QRLs.toml
+$ qrlkit add QRLs.toml
+
 # Open a new terminal, then:
 
 repos rs            # Opens gh repo with browser
@@ -59,15 +60,19 @@ qk files readme     # open qrlkit-rs README.md in neovim
 
 ```
 
-The tool is built to optimize for adaptability to *your* flow so:
+The tool is built to 1) optimize for adaptability to *your* flow:
 
 - `qrlkit add <x>` accepts any file name and supports toml, json and yaml configs
-- Set custom files and dir hooks in each config and use `--filehook` 
-`--dirhook` `--browser` to global defaults
+- Set hooks to customize behavior for files and dirs in each config and/or globally
 - Define your own CLI behavior:
     - By setting config keys you decide if it's `logs live nginx` or `logs nginx live`. 
     - Name tools and paths what you want
 - Multiple configs are supported at once. Make one for your projects, your machine or your team/org
+
+and 2) have as little friction as possible:
+
+- If you forget something run `qrlkit` to run any imported tool
+- `qrlkit` will suggest the next keys if you get stuck
 
 
 ## Install
@@ -141,6 +146,7 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 | Command | What it does |
 | --- | --- |
 | `qrlkit [keys…]` | Browse or open a resource |
+| `qrlkit --config <path> …` | Use a separate state file for debugging |
 | `qrlkit add <file-or-directory>` | Register configs and set up root commands |
 | `qrlkit ls` | List registered config files |
 | `qrlkit rm <path>` | Unregister a config; keep the file |
@@ -157,8 +163,7 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 `~/.local/state/qrlkit/state.yaml`, or in
 `~/Library/Application Support/qrlkit/state.yaml` on macOS. Use
-`qrlkit --config <path> …` for separate state. Put qrlkit options before
-resource keys; arguments after a script’s keys belong to the script.
+`qrlkit --config <path> …` for separate state (usefull for debugging). 
 
 ## Contributing
 
