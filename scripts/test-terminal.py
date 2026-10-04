@@ -59,10 +59,14 @@ def run_init(root, answers, success=True):
             if done:
                 status = result
                 break
-        if status is None:
+        # On macOS the PTY may close just before waitpid reports child exit.
+        # Keep the original deadline while allowing that exit to become visible.
+        while status is None and time.monotonic() < deadline:
             done, result = os.waitpid(pid, os.WNOHANG)
             if done:
                 status = result
+            else:
+                time.sleep(0.01)
         assert status is not None, f"Prompt timed out at step {step}: {transcript!r}"
         assert step == len(answers), f"Missing prompts: {transcript!r}"
         assert (os.waitstatus_to_exitcode(status) == 0) == success, transcript

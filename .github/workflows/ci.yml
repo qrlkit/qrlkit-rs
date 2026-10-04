@@ -32,3 +32,7 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --locked
       - run: python3 scripts/test-terminal.py
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: node npm/test.cjs target/debug/qrlkit
