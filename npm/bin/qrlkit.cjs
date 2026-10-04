@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 const { spawn } = require('node:child_process');
-const platforms = require('../platforms.cjs');
+const { optionalDependencies } = require('../package.json');
 
 const platform = `${process.platform}-${process.arch}`;
-if (!platforms[platform]) {
-  console.error(`qrlkit: unsupported platform ${platform}. Supported: ${Object.keys(platforms).join(', ')}.`);
+const packageName = `qrlkit-${platform}`;
+if (!Object.hasOwn(optionalDependencies, packageName)) {
+  const supported = Object.keys(optionalDependencies).map((name) => name.slice('qrlkit-'.length));
+  console.error(`qrlkit: unsupported platform ${platform}. Supported: ${supported.join(', ')}.`);
   process.exit(1);
 }
 
-const packageName = `qrlkit-${platform}`;
 let binary;
 try {
   binary = require.resolve(`${packageName}/bin/qrlkit`);

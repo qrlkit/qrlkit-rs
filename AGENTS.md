@@ -24,6 +24,7 @@ python3 scripts/test-terminal.py
 
 ## Continuous integration
 
+- Prefer standard CLI tools in CI; keep workflow commands short and avoid long custom scripts.
 - `.github/workflows/ci.yml` runs formatting, Clippy, tests, the build, and
   terminal integration tests for pushes to `main` and pull requests.
 - `.github/workflows/tag-and-release.yml` publishes versioned crates and Linux
