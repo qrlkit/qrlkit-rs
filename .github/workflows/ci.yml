@@ -35,4 +35,4 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24
-      - run: node npm/test.cjs target/debug/qrlkit
+      - run: node --check npm/bin/qrlkit.cjs

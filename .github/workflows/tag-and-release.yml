@@ -111,24 +111,53 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes musl-tools
 
-      - name: Build and test native binary
+      - name: Build native binary
         env:
           TARGET: ${{ matrix.target }}
-        run: |
-          cargo build --release --locked --target "$TARGET"
-          node npm/test.cjs "target/$TARGET/release/qrlkit"
+        run: cargo build --release --locked --target "$TARGET"
 
       - name: Package npm binaries and launcher
         env:
+          TAG: ${{ needs.tag.outputs.tag }}
           TARGET: ${{ matrix.target }}
           PLATFORM: ${{ matrix.platform }}
         run: |
-          mkdir -p dist
-          node npm/package.cjs "$TARGET" "target/$TARGET/release/qrlkit" staging
-          npm pack "./staging/qrlkit-$PLATFORM" --pack-destination dist
+          VERSION="${TAG#v}"
+          mkdir -p staging dist
+          cp -R npm staging/qrlkit
+          mkdir -p "staging/qrlkit/$PLATFORM/bin"
+          cp "target/$TARGET/release/qrlkit" "staging/qrlkit/$PLATFORM/bin/qrlkit"
+          cp LICENSE staging/qrlkit/LICENSE
+          cp LICENSE "staging/qrlkit/$PLATFORM/LICENSE"
+          chmod +x staging/qrlkit/bin/qrlkit.cjs "staging/qrlkit/$PLATFORM/bin/qrlkit"
+          npm --prefix staging/qrlkit pkg set "version=$VERSION" \
+            "optionalDependencies.qrlkit-linux-x64=$VERSION" \
+            "optionalDependencies.qrlkit-linux-arm64=$VERSION" \
+            "optionalDependencies.qrlkit-darwin-x64=$VERSION" \
+            "optionalDependencies.qrlkit-darwin-arm64=$VERSION"
+          npm --prefix "staging/qrlkit/$PLATFORM" pkg set "version=$VERSION"
+          npm pack "./staging/qrlkit/$PLATFORM" --pack-destination dist
+          npm pack ./staging/qrlkit --pack-destination staging
           if [ "$PLATFORM" = linux-x64 ]; then
-            npm pack ./staging/qrlkit --pack-destination dist
+            cp "staging/qrlkit-$VERSION.tgz" dist/
           fi
+
+      - name: Test packaged npm command
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          VERSION="${TAG#v}"
+          TEST_DIRECTORY=$(mktemp -d)
+          cd "$TEST_DIRECTORY"
+          npm init --yes
+          # Resolve the host binary from its local tarball instead of the registry.
+          npm pkg set "overrides.qrlkit-$PLATFORM=file:$GITHUB_WORKSPACE/dist/qrlkit-$PLATFORM-$VERSION.tgz"
+          npm install --offline --ignore-scripts --no-audit --no-fund --include=optional \
+            "$GITHUB_WORKSPACE/staging/qrlkit-$VERSION.tgz"
+          test "$(./node_modules/.bin/qrlkit --version)" = "qrlkit $VERSION"
+          ./node_modules/.bin/qrlkit --help
+          python3 "$GITHUB_WORKSPACE/scripts/test-terminal.py" "$TEST_DIRECTORY/node_modules/.bin/qrlkit"
 
       - name: Package binary
         env:
@@ -155,6 +184,9 @@ jobs:
 
   publish:
     needs: [tag, build]
+    concurrency:
+      group: publish-${{ needs.tag.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -165,12 +197,6 @@ jobs:
         with:
           ref: ${{ needs.tag.outputs.tag }}
           persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: release-*
-          merge-multiple: true
-          path: dist
 
       - uses: actions/setup-node@v6
         with:
@@ -186,6 +212,13 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      # Download only after Cargo publishes: untracked dist files dirty the checkout.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
       # Configure this workflow as a trusted publisher on each of the five npm packages.
       - name: Publish platform packages, then launcher using OIDC
         env:
@@ -193,9 +226,9 @@ jobs:
         run: |
           VERSION="${TAG#v}"
           for PLATFORM in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
-            npm publish "dist/qrlkit-$PLATFORM-$VERSION.tgz" --access public --provenance
+            npm publish "./dist/qrlkit-$PLATFORM-$VERSION.tgz" --access public --provenance
           done
-          npm publish "dist/qrlkit-$VERSION.tgz" --access public --provenance
+          npm publish "./dist/qrlkit-$VERSION.tgz" --access public --provenance
 
       - name: Create GitHub Release
         env:
@@ -205,5 +238,6 @@ jobs:
           gh release create "$TAG" \
             dist/qrlkit-*.tar.gz \
             dist/qrlkit-*.tar.gz.sha256 \
+            --verify-tag \
             --title "$TAG" \
             --generate-notes
