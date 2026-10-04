@@ -1,3 +1,6 @@
+### 0.5.4
+- Updates to CI npm releases
+
 ### 0.5.3
 - Bug fix in QRLs.toml
 
