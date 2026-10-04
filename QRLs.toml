@@ -15,14 +15,14 @@ VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].vers
 
 case "$TYPE" in
   major) HEADER="#" ;;
-  patch) HEADER="##" ;;
-  minor) HEADER="###" ;;
+  minor) HEADER="##" ;;
+  patch) HEADER="###" ;;
   *) echo "Invalid type: $TYPE"; exit 1 ;;
 esac
 
 {
   echo "$HEADER $VERSION"
-  echo "$NOTE"
+  echo "- $NOTE"
   echo
   cat CHANGELOG.md 2>/dev/null || true
 } > CHANGELOG.md.tmp
