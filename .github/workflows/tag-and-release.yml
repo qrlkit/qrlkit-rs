@@ -155,6 +155,9 @@ jobs:
 
   publish:
     needs: [tag, build]
+    concurrency:
+      group: publish-${{ needs.tag.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -166,12 +169,6 @@ jobs:
           ref: ${{ needs.tag.outputs.tag }}
           persist-credentials: false
 
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: release-*
-          merge-multiple: true
-          path: dist
-
       - uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -182,9 +179,17 @@ jobs:
         run: npm install --global npm@11
 
       - name: Publish to crates.io
-        run: cargo publish --locked
+        run: node .github/release.cjs crate "$TAG"
         env:
+          TAG: ${{ needs.tag.outputs.tag }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # Download only after Cargo publishes: untracked dist files dirty the checkout.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
 
       # Configure this workflow as a trusted publisher on each of the five npm packages.
       - name: Publish platform packages, then launcher using OIDC
@@ -192,18 +197,10 @@ jobs:
           TAG: ${{ needs.tag.outputs.tag }}
         run: |
           VERSION="${TAG#v}"
-          for PLATFORM in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
-            npm publish "dist/qrlkit-$PLATFORM-$VERSION.tgz" --access public --provenance
-          done
-          npm publish "dist/qrlkit-$VERSION.tgz" --access public --provenance
+          node npm/publish.cjs "$VERSION" dist
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.tag.outputs.tag }}
-        run: |
-          gh release create "$TAG" \
-            dist/qrlkit-*.tar.gz \
-            dist/qrlkit-*.tar.gz.sha256 \
-            --title "$TAG" \
-            --generate-notes
+        run: node .github/release.cjs github "$TAG" dist

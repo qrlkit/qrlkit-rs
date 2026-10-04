@@ -36,3 +36,4 @@ jobs:
         with:
           node-version: 24
       - run: node npm/test.cjs target/debug/qrlkit
+      - run: node --test npm/publish.test.cjs .github/release.test.cjs
