@@ -1,3 +1,6 @@
+### 0.5.3
+- Bug fix in QRLs.toml
+
 ### 0.5.2
 - Update Github Actions with build matrix
 
