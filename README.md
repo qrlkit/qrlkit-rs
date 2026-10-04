@@ -7,33 +7,66 @@
 
 # Quick Resource Locators (QRLs)
 
-QRLs are small shortcuts you define for your key bookmarks, 
-files, directories, scripts etc. Simply type them into `.toml`, 
-`.yaml` or `.json` files and `qrlkit` converts them to cli-tools:
+Basic tool to keep your key resources quickly availble at your fingertips. 
+
+Define a config with urls, dirs, scripts/snippets, files etc:  
 
 ```toml
-# resources.toml
-[docs]
-handbook = "https://example.com/handbook"
-repo = "~/work/project"
+# QRLs.toml
 
-[notes]
-today = "~/notes/today.txt"
+[repos]
+rs = "https://github.com/qrlkit/qrlkit-rs"
+web = "https://github.com/qrlkit/qrlkit-web"
 
-[notes.edit]
-run = 'nvim ~/notes/today.txt'
+[repos.prs]
+rs = "https://github.com/qrlkit/qrlkit-rs"
+web = "https://github.com/qrlkit/qrlkit-web/pulls"
+
+[qk.check]
+run = """
+cargo fmt
+cargo test 
+cargo clippy
+python3 "~dev/qrlkit-rs/test/integration.py"
+""
+shell = "zsh"
+
+[qk.dirs]
+rs = "~/dev/qrlkit-rs"
+web = "~/dev/qrlkit-web"
+dirhook = "cd $dir && tree -L 1 && 
+
+[files]
+cargo-toml = "~/dev/qrlkit-rs/Cargo.toml"
+readme = "~/dev/qrlkit-rs/README.md"
+changelog = "~/dev/qrlkit-web/CHANGELOG.md"
+filehook = "nvim $file"
 ```
 
 Import the file once:
 
 ```sh
-qrlkit add resources.toml
+qrlkit add QRLs.toml
 # Open a new terminal, then:
-docs handbook       # Opens the URL
-docs repo           # Changes your working directory
-notes today         # Prints the absolute file path
-notes edit          # Runs the script
+
+repos rs            # Opens gh repo with browser
+repos prs web       # Opens prs for gh page in browser
+qk check            # Run standard rust checks and tests in chosen shell
+qk dirs web         # cd into dir and see content via custom dirhook
+qk files readme     # open qrlkit-rs README.md in neovim
+
 ```
+
+Tool is build to optimize for adaptability to *your* flow so:
+
+- `qrlkit add <x>` accepts any file name and supports toml, json and yaml configs
+- Set custom files and dir hooks in each config and use `--filehook` 
+`--dirhook` `---browser` to global defaults
+- Define your own cli behavior:
+    - By settings config keys you decide if its `logs live nginx` or `logs nginx live`. 
+    - Name tools and paths what you want
+- Multiple configs are supported at once. Make one for your projects, your machine or your team/org
+
 
 ## Install
 
@@ -42,56 +75,54 @@ notes edit          # Runs the script
 ```
 git clone git@github.com:qrlkit/qrlkit-rs.git
 cd qrlkit-rs
-cargo install --path . 
+cargo install --path .
+
+# Then start init to set the defaults you want (shell, browser etc)
+qrlkit init 
 ```
 
-*Step 2* Write a toml, yaml or json config
+*Step 2* Write some config you want 
+
+*Step 3* Add the config
 
 ```
-[repos]
-qrlkit = 'https://github.com/qrlkit/qrlkit-rs'
+qrlkit add shortcuts.toml
 ```
 
-*Step 3* Run interactive setup
-
-```
-qrlkit init
 ```
 
-Choose an installed browser, then a supported shell, filehook command, and
-dirhook command. Press Enter for the detected shell (Bash if detection fails),
-printing file paths, and changing directories.
-Custom hooks use the unquoted `$file` or `$dir` placeholder. Setup saves your
-preferences and installs shell integration; open a new terminal to activate it.
-Import your config with `qrlkit add <file-or-directory>`.
+## Version 1 Roadmap
 
-Source-file metadata uses clean, unquoted keys:
+**Version 1 happens January 2027. Until then expect everything to break. 
+Current version is 0.5.1 but any minor version can ship with a breaking change until v1.**
 
-```toml
-filehook = 'nvim $file'
-dirhook = 'cd $dir'
+### Version 1
 
-[tools.build]
-run = 'cargo build'
-shell = 'bash'
-```
+- `qrlkit`
+    - [x] init
+    - [x] add <file | dir path>
+        - [x] multiple configs at once
+        - [x] gracefull collisions
 
-## Features
+- config
+    - [x] yaml, json and toml
+    - [x] nested keys
+    - [x] URLs
+    - [x] files and dirs
+    - [x] shell scripts 
+    - [x] file hooks
+    - [x] dir hooks
+    - [ ] browser hooks
+    - [ ] Run shell scripts 
 
-- Keys are turned in cli-tool commands
-- Supports toml, yaml, json
-- Open browser settings and extension management using internal URLs.
+- platforms/install
+    - package managers
+    - [x] `cargo install`
+    - [ ] ´npm install´
 
-- Defaults:
-    - URLs opens in default browser
-    - Dir paths are cd'd into
-    - File paths are printed in stdout
-    - Scripts are executed with bash
-
-- Customize filehook, dirhook, shell and browser
-- Urls and paths can be modified with user inputs
-- Scripts can also use inputs
-- Name collisions are handled by qrlkit cli on import 
+    - Raw install 
+        - [x] linux and macos binaries released on github
+        - [ ] install.sh 
 
 ## Commands
 
