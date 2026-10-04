@@ -96,31 +96,34 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 
 ### Version 1
 
-- `qrlkit`
-    - [x] init
-    - [x] add <file | dir path>
-        - [x] multiple configs at once
-        - [x] gracefull collisions
+#### `qrlkit` ####
 
-- config
-    - [x] yaml, json and toml
-    - [x] nested keys
-    - [x] URLs
-    - [x] files and dirs
-    - [x] shell scripts 
-    - [x] file hooks
-    - [x] dir hooks
-    - [ ] browser hooks
-    - [ ] Run shell scripts 
+- [x] init
+- [x] add <file | dir path>
+    - [x] multiple configs at once
+    - [x] gracefull collisions
 
-- platforms/install
-    - package managers
-    - [x] `cargo install`
-    - [ ] ´npm install´
+#### config ####
 
-    - Raw install 
-        - [x] linux and macos binaries released on github
-        - [ ] install.sh 
+- [x] yaml, json and toml
+- [x] nested keys
+- [x] URLs
+- [x] files and dirs
+- [x] shell scripts 
+- [x] file hooks
+- [x] dir hooks
+- [ ] browser hooks
+- [ ] Run shell scripts 
+
+#### packagemanagers ####
+
+- [x] `cargo install`
+- [ ] `npm install`
+
+#### Raw install #### 
+
+- [x] linux and macos binaries released on github
+- [ ] install.sh 
 
 ## Commands
 
