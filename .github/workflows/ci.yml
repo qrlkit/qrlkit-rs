@@ -32,6 +32,7 @@ jobs:
       - run: cargo test --locked
       - run: cargo build --locked
       - run: python3 scripts/test-terminal.py
+      - run: python3 scripts/test-install.py
       - uses: actions/setup-node@v6
         with:
           node-version: 24
