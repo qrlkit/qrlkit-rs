@@ -254,12 +254,24 @@ fn run() -> Result<i32> {
         })?;
         match resource::resolve(&value)? {
             resource::Resource::Url(url) => {
-                if state.browser.is_none() {
+                let override_browser = entry
+                    .browser
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(browser::resolve);
+                if override_browser.is_none() && state.browser.is_none() {
                     state.browser = Some(browser::choose()?);
                     state.save(&path)?;
                 }
                 eprintln!("qrlkit: open {url}");
-                return browser::open(state.browser.as_ref().unwrap(), &url).map(|_| 0);
+                return browser::open(
+                    override_browser
+                        .as_ref()
+                        .or(state.browser.as_ref())
+                        .unwrap(),
+                    &url,
+                )
+                .map(|_| 0);
             }
             resource::Resource::File(path) => {
                 if let Some(hook) = entry.filehook.as_ref().or(state.filehook.as_ref())

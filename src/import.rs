@@ -85,6 +85,7 @@ pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
         path.parent().unwrap(),
         None,
         None,
+        None,
     )?;
     ensure!(!entries.is_empty(), "No resources in {}", path.display());
     for entry in &mut entries {
@@ -110,9 +111,14 @@ fn flatten(
     source_dir: &Path,
     filehook: Option<&str>,
     dirhook: Option<&str>,
+    browser: Option<&str>,
 ) -> Result<()> {
     match value {
         Node::Table(table) => {
+            let browser = match table.get("browser") {
+                Some(value) => Some(value.as_str().context("browser must be a string")?),
+                None => browser,
+            };
             let filehook = match table.get("filehook") {
                 Some(value) => {
                     let hook = value.as_str().context("filehook must be a string")?;
@@ -152,6 +158,7 @@ fn flatten(
                     key: key.clone(),
                     url: String::new(),
                     script: Some(script),
+                    browser: None,
                     filehook: None,
                     dirhook: None,
                 });
@@ -163,12 +170,12 @@ fn flatten(
                 key.join(" ")
             );
             for (segment, child) in table {
-                if matches!(segment.as_str(), "filehook" | "dirhook") {
+                if matches!(segment.as_str(), "filehook" | "dirhook" | "browser") {
                     continue;
                 }
                 ensure!(valid_segment(segment), "Invalid key segment: {segment:?}");
                 key.push(segment.clone());
-                flatten(child, key, entries, source_dir, filehook, dirhook)?;
+                flatten(child, key, entries, source_dir, filehook, dirhook, browser)?;
                 key.pop();
             }
         }
@@ -179,6 +186,7 @@ fn flatten(
                 key: key.clone(),
                 url: url.clone(),
                 script: None,
+                browser: browser.map(str::to_owned),
                 filehook: filehook.map(str::to_owned),
                 dirhook: dirhook.map(str::to_owned),
             });
@@ -437,6 +445,46 @@ mod tests {
 #[cfg(test)]
 mod adapter_tests {
     use super::*;
+    #[test]
+    fn browser_settings_inherit_override_and_reset_across_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        for (ext, text) in [
+            (
+                "toml",
+                "browser = 'firefox'\na = 'https://example.com'\n[group]\nbrowser = 'other-browser'\nb = 'about:addons'\n[group.default]\nbrowser = ''\nc = 'https://example.com'",
+            ),
+            (
+                "yaml",
+                "browser: firefox\na: https://example.com\ngroup:\n  browser: other-browser\n  b: about:addons\n  default:\n    browser: ''\n    c: https://example.com",
+            ),
+            (
+                "json",
+                r#"{"browser":"firefox","a":"https://example.com","group":{"browser":"other-browser","b":"about:addons","default":{"browser":"","c":"https://example.com"}}}"#,
+            ),
+        ] {
+            let path = dir.path().join(format!("browsers.{ext}"));
+            fs::write(&path, text).unwrap();
+            let source = read(&path, BTreeMap::new()).unwrap();
+            assert_eq!(source.entries.len(), 3);
+            for (key, expected) in [("a", "firefox"), ("b", "other-browser"), ("c", "")] {
+                let entry = source
+                    .entries
+                    .iter()
+                    .find(|e| e.key.last().unwrap() == key)
+                    .unwrap();
+                assert_eq!(entry.browser.as_deref(), Some(expected));
+            }
+        }
+        let path = dir.path().join("invalid.toml");
+        fs::write(&path, "[browser]\nx = 'https://example.com'").unwrap();
+        assert!(
+            read(&path, BTreeMap::new())
+                .unwrap_err()
+                .to_string()
+                .contains("browser must be a string")
+        );
+    }
+
     #[test]
     fn filehook_metadata_is_inherited_across_formats_and_validated() {
         let dir = tempfile::tempdir().unwrap();

@@ -134,12 +134,12 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 #### package managers ####
 
 - [x] `cargo install`
-- [ ] `npm install`
+- [x] `npm install`
 
 #### Raw install #### 
 
 - [x] linux and macos binaries released on GitHub
-- [ ] install.sh 
+- [x] install.sh 
 
 ## Commands
 
@@ -164,6 +164,17 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 `~/.local/state/qrlkit/state.yaml`, or in
 `~/Library/Application Support/qrlkit/state.yaml` on macOS. Use
 `qrlkit --config <path> …` for separate state (usefull for debugging). 
+
+## Config
+
+TOML examples. Browser and hook settings apply to their group and nested groups.
+
+| Syntax | Description |
+| --- | --- |
+| `site = "https://example.com"`<br><br>`[web]`<br>`browser = "firefox"`<br>`site = "https://example.com"` | **URLs:** Opens in the default browser; `browser` overrides it. Set the default with `qrlkit set-browser`. |
+| `notes = "~/notes.txt"`<br><br>`[files]`<br>`filehook = "nvim $file"`<br>`notes = "~/notes.txt"` | **Files:** Prints the path by default; `filehook` changes the action. Set the default with `qrlkit set-filehook '<command>'`. |
+| `project = "~/dev/project"`<br><br>`[dirs]`<br>`dirhook = "cd $dir && ls"`<br>`project = "~/dev/project"` | **Dirs:** Changes directory through shell integration; `dirhook` changes the action. Set the default with `qrlkit set-dirhook '<command>'`. |
+| `[check]`<br>`run = "pwd"`<br><br>`[check]`<br>`run = "pwd"`<br>`shell = "zsh"` | **Run:** Runs in Bash from the config's directory; `shell` overrides it (`bash`, `sh`, or `zsh`). No global script-shell setting. |
 
 ## Contributing
 
