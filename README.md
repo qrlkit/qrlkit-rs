@@ -99,7 +99,7 @@ qrlkit add shortcuts.toml
 ## Version 1 Roadmap
 
 **Version 1 happens January 2027. Until then expect everything to break. 
-Current version is 0.5.1 but any minor version can ship with a breaking change until v1.**
+Current version is 0.5.5 but any minor version can ship with a breaking change until v1.**
 
 ### Version 1
 
@@ -117,6 +117,7 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 - [x] set-filehook <command>
 - [x] set-dirhook <command>
 - [x] nuke
+- [ ] merge keys collisions
 
 #### config ####
 
@@ -128,8 +129,11 @@ Current version is 0.5.1 but any minor version can ship with a breaking change u
 - [x] variables in paths, urls, scripts
 - [x] file hooks
 - [x] dir hooks
-- [ ] browser hooks
+- [x] browser hooks
 - [x] run shell scripts
+- [ ] automatic docs
+- [ ] hardcoded arg suggestions
+- [ ] constants 
 
 #### package managers ####
 
@@ -165,50 +169,70 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 `~/Library/Application Support/qrlkit/state.yaml` on macOS. Use
 `qrlkit --config <path> …` for separate state (usefull for debugging). 
 
-## Config
+## Config syntax
 
-TOML examples. Browser and hook settings apply to their group and nested groups.
+**URLs**
 
-<table>
-<thead>
-<tr><th align="left">Syntax</th><th align="left">Description</th></tr>
-</thead>
-<tbody>
-<tr>
-<td valign="top"><pre><code>site = "https://example.com"
+Urls open in the default browser set in `qrlkit init` or `qrlkit set-browser`. 
+Reserved key `browser` overrides it with options:
 
-[web]
+- `chrome` 
+- `firefox`
+- `safari`
+- `edge`
+- `brave`
+- `chromium`
+- `arc`
+- `vivaldi`
+- `opera`
+
+Executable paths are also supported. 
+Use `{}` to forward arguments to paths. 
+
+```toml
+[docs]
 browser = "firefox"
-site = "https://example.com"</code></pre></td>
-<td valign="top"><strong>URLs</strong><br>Opens in your default browser. <code>browser</code> overrides it.<br><br>Set default: <code>qrlkit set-browser</code></td>
-</tr>
-<tr>
-<td valign="top"><pre><code>notes = "~/notes.txt"
+fav = "https://some-docs-you-prefer-in-ff/{area}.com"
+```
 
-[files]
+**files**
+
+Files use the default action set in `qrlkit init` or `qrlkit set-filehook`.
+If neither is used they just otherwise print the file path.
+Reserved key `filehook` overrides global behavior with a command using `$file` for the selected path.
+Use `{}` in paths to forward arguments. 
+
+```toml
+[dotfiles]
 filehook = "nvim $file"
-notes = "~/notes.txt"</code></pre></td>
-<td valign="top"><strong>Files</strong><br>Prints the path by default. <code>filehook</code> runs a command with that path.<br><br>Set default: <code>qrlkit set-filehook 'nvim $file'</code></td>
-</tr>
-<tr>
-<td valign="top"><pre><code>project = "~/dev/project"
+edit = "~/.confg/{tool}/{file}"
+```
 
+**dirs**
+
+Dirs use the default action set in `qrlkit init` or `qrlkit set-dirhook`.
+If neither is used they otherwise just `cd` into directory via shell integration.
+Reserved key `dirhook` overrides global behavior with a command using `$dir` for the selected path.
+
+```toml
 [dirs]
-dirhook = "cd $dir &amp;&amp; ls"
-project = "~/dev/project"</code></pre></td>
-<td valign="top"><strong>Dirs</strong><br>Changes directory via shell integration. <code>dirhook</code> customizes the action.<br><br>Set default: <code>qrlkit set-dirhook 'cd $dir &amp;&amp; ls'</code></td>
-</tr>
-<tr>
-<td valign="top"><pre><code>[check]
-run = "pwd"
+dirhook = "cd $dir && tree -L 1"
+project = "~/dev/{repo}"
+```
 
-[check_zsh]
-run = "pwd"
-shell = "zsh"</code></pre></td>
-<td valign="top"><strong>Run</strong><br>Runs in Bash from the config's directory. <code>shell</code> selects <code>bash</code>, <code>sh</code>, or <code>zsh</code>.<br><br>No global script-shell setting.</td>
-</tr>
-</tbody>
-</table>
+**scripts**
+
+Scripts run in Bash by default from the config's directory.
+Reserved key `shell` overrides it with options `bash`, `sh`, and `zsh`.
+Use `$` notation to pass arguments.
+
+```toml
+[kube.logs]
+run = '''
+kubectl logs --namespace "$1" "$2" --follow
+'''
+shell = "zsh"
+```
 
 ## Contributing
 
