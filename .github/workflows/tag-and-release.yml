@@ -125,6 +125,7 @@ jobs:
           mkdir -p "staging/qrlkit/$PLATFORM/bin"
           cp "target/$TARGET/release/qrlkit" "staging/qrlkit/$PLATFORM/bin/qrlkit"
           cp LICENSE staging/qrlkit/LICENSE
+          cp README.md staging/qrlkit/README.md
           cp LICENSE "staging/qrlkit/$PLATFORM/LICENSE"
           chmod +x staging/qrlkit/bin/qrlkit.cjs "staging/qrlkit/$PLATFORM/bin/qrlkit"
           # Inject the Cargo-derived version and exact dependency pins into versionless manifests.
@@ -155,6 +156,7 @@ jobs:
             "$GITHUB_WORKSPACE/staging/qrlkit-$VERSION.tgz"
           jq -e --arg version "$VERSION" '.version == $version and (.optionalDependencies | length == 4 and all(.[]; . == $version))' \
             node_modules/qrlkit/package.json
+          test -f node_modules/qrlkit/README.md
           jq -e --arg version "$VERSION" '.version == $version' "node_modules/qrlkit-$PLATFORM/package.json"
           test "$(./node_modules/.bin/qrlkit --version)" = "qrlkit $VERSION"
           ./node_modules/.bin/qrlkit --help

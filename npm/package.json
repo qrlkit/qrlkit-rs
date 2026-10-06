@@ -5,7 +5,8 @@
     "qrlkit": "bin/qrlkit.cjs"
   },
   "files": [
-    "bin/qrlkit.cjs"
+    "bin/qrlkit.cjs",
+    "README.md"
   ],
   "optionalDependencies": {},
   "os": [
