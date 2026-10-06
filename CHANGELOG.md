@@ -1,3 +1,6 @@
+### 0.6.2
+- Fix missing README in npm packages
+
 ### 0.6.1
 - Bump dependencies
 
