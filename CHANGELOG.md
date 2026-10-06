@@ -1,3 +1,6 @@
+## 0.6.0
+- Implement browser hooks
+
 ### 0.5.5
 - Fix bug in CI
 

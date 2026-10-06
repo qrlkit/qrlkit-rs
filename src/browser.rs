@@ -96,6 +96,28 @@ pub fn choose() -> Result<Browser> {
     })
 }
 
+fn browser_id(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "google chrome" | "google-chrome" | "google-chrome-stable" => "chrome".into(),
+        "microsoft edge" | "microsoft-edge" => "edge".into(),
+        "brave-browser" => "brave".into(),
+        "chromium-browser" => "chromium".into(),
+        _ => name.to_ascii_lowercase(),
+    }
+}
+
+/// Resolve a config override when opening, so imports remain portable.
+pub fn resolve(value: &str) -> Browser {
+    discover()
+        .into_iter()
+        .find(|browser| browser_id(&browser.name) == browser_id(value))
+        .unwrap_or_else(|| Browser {
+            name: value.into(),
+            executable: PathBuf::from(value),
+            args: vec![],
+        })
+}
+
 pub fn open(browser: &Browser, url: &str) -> Result<()> {
     crate::resource::validate_url(url)?;
     // macOS uses Launch Services to address an already running app correctly.
@@ -130,4 +152,40 @@ pub fn open(browser: &Browser, url: &str) -> Result<()> {
         .spawn()
         .with_context(|| format!("Cannot launch {}; run qrlkit set-browser", browser.name))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lowercase_ids_match_platform_browser_names() {
+        for (id, names) in [
+            ("firefox", vec!["Firefox", "firefox"]),
+            (
+                "chrome",
+                vec!["Google Chrome", "google-chrome", "google-chrome-stable"],
+            ),
+            ("safari", vec!["Safari"]),
+            ("edge", vec!["Microsoft Edge", "microsoft-edge"]),
+            ("brave", vec!["Brave", "brave-browser"]),
+            ("chromium", vec!["chromium", "chromium-browser"]),
+            ("arc", vec!["Arc"]),
+            ("vivaldi", vec!["Vivaldi", "vivaldi"]),
+            ("opera", vec!["opera"]),
+        ] {
+            for name in names {
+                assert_eq!(browser_id(name), browser_id(id), "{name}");
+            }
+        }
+        assert_ne!(browser_id("chrome"), browser_id("chromium"));
+    }
+
+    #[test]
+    fn executable_paths_preserve_case_and_spaces() {
+        let path = "/custom/Browser App/bin/MyBrowser";
+        let browser = resolve(path);
+        assert_eq!(browser.executable, PathBuf::from(path));
+        assert!(browser.args.is_empty());
+    }
 }
