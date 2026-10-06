@@ -169,12 +169,46 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 
 TOML examples. Browser and hook settings apply to their group and nested groups.
 
-| Syntax | Description |
-| --- | --- |
-| `site = "https://example.com"`<br><br>`[web]`<br>`browser = "firefox"`<br>`site = "https://example.com"` | **URLs:** Opens in the default browser; `browser` overrides it. Set the default with `qrlkit set-browser`. |
-| `notes = "~/notes.txt"`<br><br>`[files]`<br>`filehook = "nvim $file"`<br>`notes = "~/notes.txt"` | **Files:** Prints the path by default; `filehook` changes the action. Set the default with `qrlkit set-filehook '<command>'`. |
-| `project = "~/dev/project"`<br><br>`[dirs]`<br>`dirhook = "cd $dir && ls"`<br>`project = "~/dev/project"` | **Dirs:** Changes directory through shell integration; `dirhook` changes the action. Set the default with `qrlkit set-dirhook '<command>'`. |
-| `[check]`<br>`run = "pwd"`<br><br>`[check]`<br>`run = "pwd"`<br>`shell = "zsh"` | **Run:** Runs in Bash from the config's directory; `shell` overrides it (`bash`, `sh`, or `zsh`). No global script-shell setting. |
+<table>
+<thead>
+<tr><th align="left">Syntax</th><th align="left">Description</th></tr>
+</thead>
+<tbody>
+<tr>
+<td valign="top"><pre><code>site = "https://example.com"
+
+[web]
+browser = "firefox"
+site = "https://example.com"</code></pre></td>
+<td valign="top"><strong>URLs</strong><br>Opens in your default browser. <code>browser</code> overrides it.<br><br>Set default: <code>qrlkit set-browser</code></td>
+</tr>
+<tr>
+<td valign="top"><pre><code>notes = "~/notes.txt"
+
+[files]
+filehook = "nvim $file"
+notes = "~/notes.txt"</code></pre></td>
+<td valign="top"><strong>Files</strong><br>Prints the path by default. <code>filehook</code> runs a command with that path.<br><br>Set default: <code>qrlkit set-filehook 'nvim $file'</code></td>
+</tr>
+<tr>
+<td valign="top"><pre><code>project = "~/dev/project"
+
+[dirs]
+dirhook = "cd $dir &amp;&amp; ls"
+project = "~/dev/project"</code></pre></td>
+<td valign="top"><strong>Dirs</strong><br>Changes directory via shell integration. <code>dirhook</code> customizes the action.<br><br>Set default: <code>qrlkit set-dirhook 'cd $dir &amp;&amp; ls'</code></td>
+</tr>
+<tr>
+<td valign="top"><pre><code>[check]
+run = "pwd"
+
+[check_zsh]
+run = "pwd"
+shell = "zsh"</code></pre></td>
+<td valign="top"><strong>Run</strong><br>Runs in Bash from the config's directory. <code>shell</code> selects <code>bash</code>, <code>sh</code>, or <code>zsh</code>.<br><br>No global script-shell setting.</td>
+</tr>
+</tbody>
+</table>
 
 ## Contributing
 
