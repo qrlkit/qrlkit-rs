@@ -1,9 +1,15 @@
 {
   "web": {
-    "docs": "https://docs.rs/ratatui/latest/ratatui/"
+    "docs": {
+      "url": "https://docs.rs/ratatui/latest/ratatui/",
+      "hint": "Opens the documentation"
+    }
   },
   "paths": {
-    "repo": "./",
+    "repo": {
+      "url": "./",
+      "hint": "Opens repo"
+    },
     "project": "/home/bob/work/project",
     "readme": "./README.md"
   },

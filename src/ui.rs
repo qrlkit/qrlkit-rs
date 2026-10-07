@@ -122,7 +122,21 @@ fn render_prompt(
 
 #[cfg(test)]
 mod tests {
-    use super::prompt_height;
+    use super::{key_label, prompt_height};
+
+    #[test]
+    fn hint_labels_preserve_keys_and_stay_on_one_row() {
+        assert_eq!(
+            key_label("repo", Some("Opens repo")),
+            "repo        Opens repo"
+        );
+        assert_eq!(key_label("repo", None), "repo");
+        assert_eq!(key_label("repo", Some("  ")), "repo");
+        assert_eq!(
+            key_label("repo", Some("One\nTwo\tThree")),
+            "repo        One Two Three"
+        );
+    }
 
     #[test]
     fn picker_height_includes_every_option() {
@@ -210,7 +224,21 @@ pub fn input_optional(title: &str) -> Result<String> {
     prompt(title, &[], true, false, true)
 }
 
-/// Resource navigation only: keys and a selection marker, sized to the list.
+/// Keep hints on one terminal row, including when loaded from hand-edited state.
+pub fn key_label(key: &str, hint: Option<&str>) -> String {
+    match hint.filter(|hint| !hint.trim().is_empty()) {
+        Some(hint) => {
+            let hint: String = hint
+                .chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect();
+            format!("{key}        {hint}")
+        }
+        None => key.to_owned(),
+    }
+}
+
+/// Resource navigation only: keys, optional hints, and a selection marker.
 pub fn select_key(options: &[String]) -> Result<usize> {
     ensure!(!options.is_empty(), "No keys available");
     Ok(prompt("Resource selection", options, false, true, false)?.parse()?)
