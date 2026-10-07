@@ -33,6 +33,11 @@ git add Cargo.toml Cargo.lock CHANGELOG.md
 git commit -m "release: v$VERSION"
 """
 
-[qk.prs]
+[qk.gh.pr]
 rs = "https://github.com/qrlkit/qrlkit-rs/pulls"
+web = "https://github.com/qrlkit/qrlkit-web/pulls"
+
+[qk.gh]
+p = "https://qrlkit.github.io/qrlkit-web/"
+org = "https://github.com/qrlkit"
 

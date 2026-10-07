@@ -1,3 +1,6 @@
+## 0.7.0
+- Add set-collision-strategy
+
 ### 0.6.2
 - Fix missing README in npm packages
 

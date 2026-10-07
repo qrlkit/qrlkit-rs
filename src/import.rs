@@ -1,5 +1,5 @@
 use crate::format::Node;
-use crate::store::{Entry, Source};
+use crate::store::{CollisionStrategy, Entry, Source};
 use anyhow::{Context, Result, ensure};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -92,11 +92,10 @@ pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
         if entry.script.is_none() {
             entry.url = crate::resource::normalize(&entry.url)?;
         }
-        if let Some(alias) = renames.get(&entry.key[0]) {
-            entry.key[0] = alias.clone();
-        }
+        entry.key = map_key(&entry.key, &renames, false);
     }
     Ok(Source {
+        collision_strategy: None,
         alias,
         path,
         renames,
@@ -199,16 +198,38 @@ pub fn roots(source: &Source) -> BTreeSet<String> {
     source.entries.iter().map(|e| e.key[0].clone()).collect()
 }
 
-/// Returns the highest conflicting namespace, including collisions inside one source.
-pub fn collision(sources: &[Source]) -> Option<(usize, usize, String)> {
+/// Shared namespaces merge; resources conflict with equal paths or descendants.
+pub fn collision(
+    sources: &[Source],
+    strategy: CollisionStrategy,
+) -> Option<(usize, usize, String)> {
     for (i, source) in sources.iter().enumerate() {
         for root in roots(source) {
             if reserved(&root) {
                 return Some((i, i, root));
             }
-            for (j, other) in sources.iter().enumerate().take(i) {
-                if roots(other).contains(&root) {
-                    return Some((j, i, root));
+        }
+        for (j, other) in sources.iter().enumerate().take(i) {
+            // Newer explicit choices take precedence; otherwise honor the older
+            // file's override before falling back to the global default.
+            let strategy = source
+                .collision_strategy
+                .or(other.collision_strategy)
+                .unwrap_or(strategy);
+            for entry in &source.entries {
+                for other_entry in &other.entries {
+                    let path = if strategy == CollisionStrategy::Rename {
+                        (entry.key[0] == other_entry.key[0]).then_some(&entry.key[..1])
+                    } else if entry.key.starts_with(&other_entry.key) {
+                        Some(other_entry.key.as_slice())
+                    } else if other_entry.key.starts_with(&entry.key) {
+                        Some(entry.key.as_slice())
+                    } else {
+                        None
+                    };
+                    if let Some(path) = path {
+                        return Some((j, i, path.join(" ")));
+                    }
                 }
             }
         }
@@ -216,31 +237,69 @@ pub fn collision(sources: &[Source]) -> Option<(usize, usize, String)> {
     None
 }
 
-pub fn rename(source: &mut Source, root: &str, alias: &str) -> Result<()> {
-    ensure!(
-        valid_segment(alias) && !reserved(alias),
-        "Enter one namespace without spaces or a reserved command name"
-    );
-    ensure!(
-        !roots(source).contains(alias),
-        "Namespace {alias} already exists in this file"
-    );
-    let originals: Vec<_> = source
-        .renames
-        .iter()
-        .filter(|(_, v)| v.as_str() == root)
-        .map(|(k, _)| k.clone())
-        .collect();
-    if originals.is_empty() {
-        source.renames.insert(root.into(), alias.into());
-    } else {
-        for original in originals {
-            source.renames.insert(original, alias.into());
+/// Apply the most specific saved prefix once, using original paths as identity.
+/// Segments cannot contain whitespace, so spaces encode paths without ambiguity.
+pub fn map_key(key: &[String], renames: &BTreeMap<String, String>, reverse: bool) -> Vec<String> {
+    for end in (1..=key.len()).rev() {
+        let prefix = key[..end].join(" ");
+        let replacement = if reverse {
+            renames
+                .iter()
+                .find_map(|(original, alias)| (alias == &prefix).then_some(original))
+        } else {
+            renames.get(&prefix)
+        };
+        if let Some(replacement) = replacement {
+            return replacement
+                .split(' ')
+                .map(str::to_owned)
+                .chain(key[end..].iter().cloned())
+                .collect();
         }
     }
+    key.to_vec()
+}
+
+pub fn rename(source: &mut Source, path: &str, alias: &str) -> Result<()> {
+    let key: Vec<String> = path.split(' ').map(str::to_owned).collect();
+    ensure!(
+        valid_segment(alias) && (key.len() > 1 || !reserved(alias)),
+        "Enter one namespace without spaces or a reserved command name"
+    );
+    let mut target = key.clone();
+    *target.last_mut().unwrap() = alias.into();
+    ensure!(
+        source
+            .entries
+            .iter()
+            .any(|entry| entry.key.starts_with(&key)),
+        "Unknown namespace: {path}"
+    );
+    ensure!(
+        !source
+            .entries
+            .iter()
+            .any(|entry| entry.key.starts_with(&target) || target.starts_with(&entry.key)),
+        "Namespace {} already exists in this file",
+        target.join(" ")
+    );
+    let original = map_key(&key, &source.renames, true).join(" ");
+    // Keep descendant aliases attached when an ancestor is renamed later.
+    for effective in source.renames.values_mut() {
+        let parts: Vec<String> = effective.split(' ').map(str::to_owned).collect();
+        if parts.starts_with(&key) {
+            *effective = target
+                .iter()
+                .chain(&parts[key.len()..])
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    source.renames.insert(original, target.join(" "));
     for entry in &mut source.entries {
-        if entry.key[0] == root {
-            entry.key[0] = alias.into();
+        if entry.key.starts_with(&key) {
+            entry.key[..key.len()].clone_from_slice(&target);
         }
     }
     Ok(())
@@ -250,17 +309,19 @@ pub fn reload(sources: &[Source]) -> Result<Vec<Source>> {
     sources.iter().map(|s| {
         // Validate and transform the same snapshot; do not reread a changing file.
         let mut loaded = read(&s.path, BTreeMap::new())?;
-        let mut effective = BTreeSet::new();
-        for root in roots(&loaded) {
-            let alias = s.renames.get(&root).cloned().unwrap_or(root);
-            ensure!(effective.insert(alias.clone()), "Reload would merge namespaces into {alias} in {}; rename the new root in the config file first", s.path.display());
-        }
+        let mut effective = BTreeMap::new();
         for entry in &mut loaded.entries {
-            if let Some(alias) = s.renames.get(&entry.key[0]) {
-                entry.key[0] = alias.clone();
+            for end in 1..=entry.key.len() {
+                let original = entry.key[..end].to_vec();
+                let alias = map_key(&original, &s.renames, false);
+                if let Some(previous) = effective.insert(alias.clone(), original.clone()) {
+                    ensure!(previous == original, "Reload would merge namespaces into {} in {}; rename the new key in the config file first", alias.join(" "), s.path.display());
+                }
             }
+            entry.key = map_key(&entry.key, &s.renames, false);
         }
         loaded.renames = s.renames.clone();
+        loaded.collision_strategy = s.collision_strategy;
         Ok(loaded)
     }).collect()
 }
@@ -274,11 +335,131 @@ mod tests {
         read(&path, BTreeMap::new()).unwrap()
     }
     #[test]
+    fn file_overrides_take_precedence_over_defaults_and_newer_overrides_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = fixture(dir.path(), "a.toml", "[qk]\na = 'https://a.test'");
+        let mut second = fixture(dir.path(), "b.toml", "[qk]\nb = 'https://b.test'");
+        for (older, newer, default, conflicts) in [
+            (None, None, CollisionStrategy::Merge, false),
+            (None, None, CollisionStrategy::Rename, true),
+            (
+                Some(CollisionStrategy::Merge),
+                None,
+                CollisionStrategy::Rename,
+                false,
+            ),
+            (
+                Some(CollisionStrategy::Rename),
+                None,
+                CollisionStrategy::Merge,
+                true,
+            ),
+            (
+                Some(CollisionStrategy::Rename),
+                Some(CollisionStrategy::Merge),
+                CollisionStrategy::Rename,
+                false,
+            ),
+            (
+                Some(CollisionStrategy::Merge),
+                Some(CollisionStrategy::Rename),
+                CollisionStrategy::Merge,
+                true,
+            ),
+        ] {
+            first.collision_strategy = older;
+            second.collision_strategy = newer;
+            let sources = reload(&[first.clone(), second.clone()]).unwrap();
+            assert_eq!(sources[0].collision_strategy, older);
+            assert_eq!(sources[1].collision_strategy, newer);
+            assert_eq!(collision(&sources, default).is_some(), conflicts);
+        }
+    }
+
+    #[test]
+    fn merge_combines_namespaces_and_detects_exact_and_prefix_conflicts() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = fixture(dir.path(), "a.toml", "[qk.git]\nprs = 'https://a.test'");
+        let b = fixture(
+            dir.path(),
+            "b.yaml",
+            "qk:\n  git:\n    issues: https://b.test",
+        );
+        assert!(collision(&[a.clone(), b.clone()], CollisionStrategy::Merge).is_none());
+        assert_eq!(
+            collision(&[a.clone(), b], CollisionStrategy::Rename),
+            Some((0, 1, "qk".into()))
+        );
+        for text in [
+            "[qk.git]\nprs = 'https://a.test'",
+            "[qk.git.prs]\nchild = 'https://b.test'",
+        ] {
+            let b = fixture(dir.path(), "b.toml", text);
+            for mut sources in [vec![a.clone(), b.clone()], vec![b, a.clone()]] {
+                assert_eq!(
+                    collision(&sources, CollisionStrategy::Merge),
+                    Some((0, 1, "qk git prs".into()))
+                );
+                rename(&mut sources[1], "qk git prs", "team-prs").unwrap();
+                assert!(collision(&sources, CollisionStrategy::Merge).is_none());
+                let loaded = reload(&sources).unwrap();
+                assert_eq!(loaded[1].entries[0].key, sources[1].entries[0].key);
+            }
+        }
+    }
+
+    #[test]
+    fn nested_aliases_compose_with_ancestor_aliases_and_survive_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = fixture(
+            dir.path(),
+            "a.toml",
+            "[qk.git]\n'api.v2' = 'https://a.test'\nissues = 'https://b.test'",
+        );
+        rename(&mut source, "qk git api.v2", "team-api").unwrap();
+        rename(&mut source, "qk", "work").unwrap();
+        rename(&mut source, "work git", "team-git").unwrap();
+        rename(&mut source, "work team-git team-api", "nuke").unwrap();
+        let loaded = reload(&[source]).unwrap();
+        let key = vec!["work".into(), "team-git".into(), "nuke".into()];
+        assert_eq!(loaded[0].entries[0].key, key);
+        assert_eq!(
+            map_key(&key, &loaded[0].renames, true),
+            ["qk", "git", "api.v2"]
+        );
+        assert_eq!(loaded[0].entries[1].key, ["work", "team-git", "issues"]);
+        fs::write(&loaded[0].path, "[qk.git]\nissues = 'https://b.test'").unwrap();
+        let loaded = reload(&loaded).unwrap();
+        fs::write(&loaded[0].path, "[qk.git]\n'api.v2' = 'https://new.test'").unwrap();
+        assert_eq!(reload(&loaded).unwrap()[0].entries[0].key, key);
+    }
+
+    #[test]
+    fn nested_aliases_reject_sibling_merges_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = fixture(
+            dir.path(),
+            "a.toml",
+            "[qk.git]\nprs = 'https://a.test'\nissues = 'https://b.test'",
+        );
+        let before = serde_yaml_ng::to_string(&source).unwrap();
+        assert!(rename(&mut source, "qk git prs", "issues").is_err());
+        assert_eq!(serde_yaml_ng::to_string(&source).unwrap(), before);
+        rename(&mut source, "qk git prs", "team-prs").unwrap();
+        fs::write(
+            &source.path,
+            "[qk.git]\nprs = 'https://a.test'\n[ qk.git.team-prs ]\nchild = 'https://b.test'",
+        )
+        .unwrap();
+        assert!(reload(&[source]).is_err());
+    }
+
+    #[test]
     fn script_roots_rename_and_reload_without_exposing_metadata_keys() {
         let dir = tempfile::tempdir().unwrap();
         let mut source = fixture(dir.path(), "script.toml", "[nuke]\nrun = 'echo first'\n");
         assert_eq!(source.entries[0].key, ["nuke"]);
-        assert!(collision(std::slice::from_ref(&source)).is_some());
+        assert!(collision(std::slice::from_ref(&source), CollisionStrategy::Rename).is_some());
         rename(&mut source, "nuke", "cleanup").unwrap();
         fs::write(&source.path, "[nuke]\nrun = 'echo updated'\n").unwrap();
         let loaded = reload(&[source]).unwrap();
@@ -296,7 +477,7 @@ mod tests {
             "literal.toml",
             "home = 'https://example.com'\n[git]\n'api.v2' = 'https://example.com/v2'\n[git.nuke]\n'øvelse' = 'https://example.com/unicode'",
         );
-        assert!(collision(std::slice::from_ref(&source)).is_none());
+        assert!(collision(std::slice::from_ref(&source), CollisionStrategy::Rename).is_none());
         for key in [
             vec!["home"],
             vec!["git", "api.v2"],
@@ -348,6 +529,7 @@ mod tests {
             "rm",
             "reload",
             "set-browser",
+            "set-collision-strategy",
             "set-filehook",
             "set-dirhook",
             "nuke",
@@ -359,10 +541,13 @@ mod tests {
                 "commands.toml",
                 &format!("[{root}]\nrepo = 'https://example.com'"),
             );
-            assert_eq!(collision(&[source.clone()]), Some((0, 0, root.into())));
+            assert_eq!(
+                collision(&[source.clone()], CollisionStrategy::Rename),
+                Some((0, 0, root.into()))
+            );
             assert!(rename(&mut source, root, "nuke").is_err());
             rename(&mut source, root, "team-links").unwrap();
-            assert!(collision(std::slice::from_ref(&source)).is_none());
+            assert!(collision(std::slice::from_ref(&source), CollisionStrategy::Rename).is_none());
             assert_eq!(source.entries[0].key, ["team-links", "repo"]);
         }
         assert!(!reserved("prs"));
@@ -374,9 +559,12 @@ mod tests {
         let a = fixture(dir.path(), "a.toml", "[git]\nprs = 'https://a.test'");
         let b = fixture(dir.path(), "b.toml", "[git]\nissues = 'https://b.test'");
         let mut sources = vec![a, b];
-        assert_eq!(collision(&sources), Some((0, 1, "git".into())));
+        assert_eq!(
+            collision(&sources, CollisionStrategy::Rename),
+            Some((0, 1, "git".into()))
+        );
         rename(&mut sources[1], "git", "team2-git").unwrap();
-        assert!(collision(&sources).is_none());
+        assert!(collision(&sources, CollisionStrategy::Rename).is_none());
         assert_eq!(sources[1].entries[0].key, ["team2-git", "issues"]);
     }
     #[test]
@@ -438,7 +626,10 @@ mod tests {
             "reserved.toml",
             "[reload]\na = 'https://a.test'",
         );
-        assert_eq!(collision(&[source]), Some((0, 0, "reload".into())));
+        assert_eq!(
+            collision(&[source], CollisionStrategy::Rename),
+            Some((0, 0, "reload".into()))
+        );
     }
 }
 
@@ -594,12 +785,15 @@ mod adapter_tests {
             fs::write(&path, text).unwrap();
             sources.push(read(&path, BTreeMap::new()).unwrap());
         }
-        assert_eq!(collision(&sources), Some((0, 1, "web".into())));
+        assert_eq!(
+            collision(&sources, CollisionStrategy::Rename),
+            Some((0, 1, "web".into()))
+        );
         rename(&mut sources[1], "web", "yaml-web").unwrap();
         rename(&mut sources[2], "web", "json-web").unwrap();
         fs::write(&sources[1].path, "web:\n  new: https://new.test").unwrap();
         let loaded = reload(&sources).unwrap();
-        assert!(collision(&loaded).is_none());
+        assert!(collision(&loaded, CollisionStrategy::Rename).is_none());
         assert_eq!(loaded[1].entries[0].key, ["yaml-web", "new"]);
         fs::write(&sources[2].path, r#"{"web":{"shell":"bash"}}"#).unwrap();
         assert!(reload(&sources).is_err());

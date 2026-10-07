@@ -107,24 +107,35 @@ pub fn functions(state: &State, config: &Path, shell: Shell) -> Result<String> {
         if let Some(name) = &source.alias {
             valid_name(name)?;
             names.insert(name.to_ascii_lowercase());
-            commands.push((name.clone(), source, None));
+            commands.push((name.clone(), Some(source), None));
         }
     }
+    let mut roots = BTreeSet::new();
     for source in &state.sources {
         for root in crate::import::roots(source) {
+            if !roots.insert(root.clone()) {
+                continue;
+            }
             if valid_name(&root).is_err() || !names.insert(root.to_ascii_lowercase()) {
                 eprintln!("qrlkit: cannot create command {root:?}; use qrlkit {root} instead");
                 continue;
             }
-            commands.push((root.clone(), source, Some(root)));
+            commands.push((root.clone(), None, Some(root)));
         }
     }
     for (name, source, root) in commands {
-        let path = quote(&source.path.to_string_lossy(), &shell);
+        let scope = source
+            .map(|source| {
+                format!(
+                    " --source {}",
+                    quote(&source.path.to_string_lossy(), &shell)
+                )
+            })
+            .unwrap_or_default();
         let root = root
             .map(|root| format!(" --root {}", quote(&root, &shell)))
             .unwrap_or_default();
-        let command = format!("qrlkit --config {config} --source {path}{root} __lookup");
+        let command = format!("qrlkit --config {config}{scope}{root} __lookup");
         // Check at shell startup too, where user-defined functions/aliases are visible.
         result.push_str(&match shell {
             Shell::Bash | Shell::Zsh => format!("if ! command -v {name} >/dev/null 2>&1; then\n{name}() {{ {command} \"$@\"; }}\nelse\nprintf '%s\\n' 'qrlkit: alias {name} conflicts with an existing command' >&2\nfi\n"),

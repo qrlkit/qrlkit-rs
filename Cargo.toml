@@ -1,6 +1,6 @@
 [package]
 name = "qrlkit"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 description = "Quick Resource Locator: open named URLs from imported TOML files"
 license = "MIT"
