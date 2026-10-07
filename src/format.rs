@@ -99,6 +99,119 @@ pub fn parse(path: &Path, text: &str) -> Result<Node> {
     Ok(node)
 }
 
+/// Read comment metadata using parser-provided key spans, so text inside
+/// multiline strings cannot be mistaken for resource declarations.
+pub fn toml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
+    struct Keys(Vec<(toml::Spanned<String>, Keys)>);
+    impl<'de> Deserialize<'de> for Keys {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct KeyVisitor;
+            impl<'de> Visitor<'de> for KeyVisitor {
+                type Value = Keys;
+                fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                    f.write_str("a resource string or table")
+                }
+                fn visit_str<E: de::Error>(self, _: &str) -> Result<Keys, E> {
+                    Ok(Keys(vec![]))
+                }
+                fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Keys, M::Error> {
+                    let mut keys = vec![];
+                    while let Some(entry) = map.next_entry()? {
+                        keys.push(entry);
+                    }
+                    Ok(Keys(keys))
+                }
+            }
+            deserializer.deserialize_any(KeyVisitor)
+        }
+    }
+    fn collect(
+        tree: Keys,
+        text: &str,
+        path: &mut Vec<String>,
+        hints: &mut BTreeMap<Vec<String>, String>,
+    ) {
+        for (key, children) in tree.0 {
+            let before = &text[..key.span().start];
+            let (previous, prefix) = before.rsplit_once('\n').unwrap_or(("", before));
+            path.push(key.into_inner());
+            // Inline table members share their parent's line, not its hint.
+            if !prefix.contains('=')
+                && let Some(hint) = previous
+                    .rsplit('\n')
+                    .next()
+                    .and_then(|line| line.trim().strip_prefix("# hint:"))
+                    .map(str::trim)
+                    .filter(|hint| !hint.is_empty())
+            {
+                hints.insert(path.clone(), hint.to_owned());
+            }
+            collect(children, text, path, hints);
+            path.pop();
+        }
+    }
+    let tree = toml::from_str(text)?;
+    let mut hints = BTreeMap::new();
+    collect(tree, text, &mut vec![], &mut hints);
+    Ok(hints)
+}
+
+/// YAML key events carry line positions and exclude comments inside scalar bodies.
+pub fn yaml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
+    use yaml_rust2::parser::{Event, Parser};
+    let lines: Vec<_> = text.lines().collect();
+    let mut parser = Parser::new_from_str(text);
+    let mut keys: Vec<Option<String>> = vec![];
+    let mut hints = BTreeMap::new();
+    loop {
+        let (event, marker) = parser.next_token()?;
+        match event {
+            Event::MappingStart(..) => keys.push(None),
+            Event::MappingEnd => {
+                keys.pop();
+                if let Some(key) = keys.last_mut() {
+                    *key = None;
+                }
+            }
+            Event::Scalar(value, ..) => {
+                if let Some(key) = keys.last_mut() {
+                    if key.is_some() {
+                        *key = None;
+                    } else {
+                        *key = Some(value);
+                        // Only a key beginning a line can follow a hint comment.
+                        let own_line = lines.get(marker.line() - 1).is_some_and(|line| {
+                            line.chars().take(marker.col()).all(char::is_whitespace)
+                        });
+                        if own_line
+                            && let Some(hint) = marker
+                                .line()
+                                .checked_sub(2)
+                                .and_then(|line| lines.get(line))
+                                .and_then(|line| line.trim().strip_prefix("# hint:"))
+                                .map(str::trim)
+                                .filter(|hint| !hint.is_empty())
+                        {
+                            hints.insert(
+                                keys.iter().filter_map(Clone::clone).collect(),
+                                hint.to_owned(),
+                            );
+                        }
+                    }
+                }
+            }
+            Event::Alias(_) => {
+                if let Some(key) = keys.last_mut() {
+                    *key = None;
+                }
+            }
+            Event::StreamEnd => break,
+            _ => {}
+        }
+    }
+    Ok(hints)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

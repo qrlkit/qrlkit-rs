@@ -125,7 +125,19 @@ fn browse(state: &State, mut key: Vec<String>) -> Result<Option<store::Entry>> {
             println!();
             return Ok(None);
         }
-        let choice = ui::select_key(&children)?;
+        let options = children
+            .iter()
+            .map(|child| {
+                let mut full_key = key.clone();
+                full_key.push(child.clone());
+                let hint = state
+                    .lookup(&full_key)
+                    .ok()
+                    .and_then(|entry| entry.hint.as_deref());
+                ui::key_label(child, hint)
+            })
+            .collect::<Vec<_>>();
+        let choice = ui::select_key(&options)?;
         key.push(children[choice].clone());
     }
 }

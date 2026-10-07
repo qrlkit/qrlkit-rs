@@ -58,7 +58,19 @@ pub fn valid_segment(key: &str) -> bool {
 
 pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
     let path = fs::canonicalize(path).with_context(|| format!("Cannot find {}", path.display()))?;
-    let mut value = crate::format::parse(&path, &fs::read_to_string(&path)?)?;
+    let text = fs::read_to_string(&path)?;
+    let mut value = crate::format::parse(&path, &text)?;
+    let hints = match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "toml" => crate::format::toml_hints(&text)?,
+        "yaml" | "yml" => crate::format::yaml_hints(&text)?,
+        _ => BTreeMap::new(),
+    };
     let alias = if let Node::Table(table) = &mut value {
         match table.remove("alias") {
             Some(Node::Table(mut metadata)) => {
@@ -91,6 +103,9 @@ pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
     for entry in &mut entries {
         if entry.script.is_none() {
             entry.url = crate::resource::normalize(&entry.url)?;
+        }
+        if entry.hint.is_none() {
+            entry.hint = hints.get(&entry.key).cloned();
         }
         entry.key = map_key(&entry.key, &renames, false);
     }
@@ -134,10 +149,37 @@ fn flatten(
                 }
                 None => dirhook,
             };
+            if table.contains_key("url") && table.contains_key("hint") {
+                ensure!(!key.is_empty(), "Resource objects must have a name");
+                ensure!(
+                    table.keys().all(|k| matches!(
+                        k.as_str(),
+                        "url" | "hint" | "browser" | "filehook" | "dirhook"
+                    )),
+                    "Resource {} cannot contain child resources or unknown settings",
+                    key.join(" ")
+                );
+                let hint = table["hint"].as_str().context("hint must be a string")?;
+                let url = table["url"].as_str().context("url must be a string")?;
+                flatten(
+                    &Node::String(url.to_owned()),
+                    key,
+                    entries,
+                    source_dir,
+                    filehook,
+                    dirhook,
+                    browser,
+                )?;
+                entries.last_mut().unwrap().hint =
+                    Some(hint.trim().to_owned()).filter(|s| !s.is_empty());
+                return Ok(());
+            }
             if let Some(run) = table.get("run") {
                 ensure!(!key.is_empty(), "run must belong to a named resource table");
                 ensure!(
-                    table.keys().all(|k| matches!(k.as_str(), "run" | "shell")),
+                    table
+                        .keys()
+                        .all(|k| matches!(k.as_str(), "run" | "shell" | "hint")),
                     "Script {} cannot contain child resources or unknown settings",
                     key.join(" ")
                 );
@@ -154,6 +196,13 @@ fn flatten(
                 };
                 script.validate()?;
                 entries.push(Entry {
+                    hint: table
+                        .get("hint")
+                        .map(|value| value.as_str().context("hint must be a string"))
+                        .transpose()?
+                        .map(str::trim)
+                        .filter(|hint| !hint.is_empty())
+                        .map(str::to_owned),
                     key: key.clone(),
                     url: String::new(),
                     script: Some(script),
@@ -182,6 +231,7 @@ fn flatten(
             crate::template::names(url)?;
             crate::resource::validate(url).with_context(|| format!("At {}", key.join(" ")))?;
             entries.push(Entry {
+                hint: None,
                 key: key.clone(),
                 url: url.clone(),
                 script: None,
@@ -334,6 +384,67 @@ mod tests {
         fs::write(&path, text).unwrap();
         read(&path, BTreeMap::new()).unwrap()
     }
+    #[test]
+    fn toml_hints_follow_resources_and_refresh_after_renaming() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = fixture(
+            dir.path(),
+            "hints.TOML",
+            r#"
+[web]
+# hint: Opens repo
+repo = 'https://example.com'
+# hint: Literal dotted key
+'api.v2' = 'https://example.com/v2'
+plain = 'https://example.com/plain'
+# hint: Detached
+
+blank = 'https://example.com/blank'
+# hint: Not the next resource
+# ordinary comment
+comment = 'https://example.com/comment'
+# hint:
+empty = 'https://example.com/empty'
+# hint: Nested
+nested.page = 'https://example.com/nested'
+# hint: Runs a task
+[task]
+run = '''
+# hint: Fake hint inside a script
+web.repo = "not a resource"
+'''
+"#,
+        );
+        for (key, expected) in [
+            ("web repo", Some("Opens repo")),
+            ("web api.v2", Some("Literal dotted key")),
+            ("web plain", None),
+            ("web blank", None),
+            ("web comment", None),
+            ("web empty", None),
+            ("web nested page", Some("Nested")),
+            ("task", Some("Runs a task")),
+        ] {
+            let entry = source
+                .entries
+                .iter()
+                .find(|e| e.key.join(" ") == key)
+                .unwrap();
+            assert_eq!(entry.hint.as_deref(), expected, "{key}");
+        }
+        rename(&mut source, "web", "links").unwrap();
+        fs::write(
+            &source.path,
+            "[web]\n# hint: Updated\nrepo = 'https://example.com'",
+        )
+        .unwrap();
+        let loaded = reload(&[source]).unwrap();
+        assert_eq!(loaded[0].entries[0].key, ["links", "repo"]);
+        assert_eq!(loaded[0].entries[0].hint.as_deref(), Some("Updated"));
+        fs::write(&loaded[0].path, "[web]\nrepo = 'https://example.com'").unwrap();
+        assert!(reload(&loaded).unwrap()[0].entries[0].hint.is_none());
+    }
+
     #[test]
     fn file_overrides_take_precedence_over_defaults_and_newer_overrides_win() {
         let dir = tempfile::tempdir().unwrap();
@@ -757,6 +868,101 @@ mod adapter_tests {
     }
 
     #[test]
+    fn yaml_hints_use_key_locations_and_ignore_scalar_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = {
+            let path = dir.path().join("hints.yml");
+            fs::write(
+                &path,
+                r#"
+web:
+  # hint: Opens ø repo
+  'repo:main': https://example.com
+  # hint: Detached
+
+  plain: https://example.com/plain
+  # hint: Empty
+  # ordinary comment
+  other: https://example.com/other
+  nested:
+    # hint: Nested page
+    page: https://example.com/page
+# hint: Runs task
+task:
+  run: |
+    # hint: Not metadata
+    web: fake
+quoted:
+  run: "echo hello
+    # hint: Not a real key
+    web: fake"
+"#,
+            )
+            .unwrap();
+            read(&path, BTreeMap::new()).unwrap()
+        };
+        for (key, hint) in [
+            ("web repo:main", Some("Opens ø repo")),
+            ("web plain", None),
+            ("web other", None),
+            ("web nested page", Some("Nested page")),
+            ("task", Some("Runs task")),
+            ("quoted", None),
+        ] {
+            let entry = source
+                .entries
+                .iter()
+                .find(|e| e.key.join(" ") == key)
+                .unwrap();
+            assert_eq!(entry.hint.as_deref(), hint, "{key}");
+        }
+        let windows = fs::read_to_string(&source.path)
+            .unwrap()
+            .replace('\n', "\r\n");
+        fs::write(&source.path, windows).unwrap();
+        assert_eq!(
+            serde_json::to_value(&source.entries).unwrap(),
+            serde_json::to_value(&reload(&[source]).unwrap()[0].entries).unwrap()
+        );
+    }
+
+    #[test]
+    fn resource_objects_validate_hints_and_inherit_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hints.json");
+        fs::write(&path, r#"{"browser":"firefox","web":{"repo":{"url":"https://example.com","hint":" Opens repo "}},"task":{"run":"echo hi","hint":"Runs task"}}"#).unwrap();
+        let source = read(&path, BTreeMap::new()).unwrap();
+        let repo = source
+            .entries
+            .iter()
+            .find(|e| e.key == ["web", "repo"])
+            .unwrap();
+        assert_eq!(repo.hint.as_deref(), Some("Opens repo"));
+        assert_eq!(repo.browser.as_deref(), Some("firefox"));
+        assert_eq!(
+            source
+                .entries
+                .iter()
+                .find(|e| e.key == ["task"])
+                .unwrap()
+                .hint
+                .as_deref(),
+            Some("Runs task")
+        );
+        for text in [
+            r#"{"repo":{"url":"https://example.com","hint":42}}"#,
+            r#"{"repo":{"url":"https://example.com","hint":{}}}"#,
+            r#"{"repo":{"url":{},"hint":"Opens repo"}}"#,
+            r#"{"repo":{"url":"https://example.com","hint":"Opens repo","child":"./file"}}"#,
+            r#"{"repo":{"url":"https://example.com","hint":"Opens repo","run":"echo hi"}}"#,
+            r#"{"task":{"run":"echo hi","hint":{}}}"#,
+        ] {
+            fs::write(&path, text).unwrap();
+            assert!(read(&path, BTreeMap::new()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn shipped_examples_have_identical_resources() {
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
         let mut snapshots = vec![];
@@ -767,6 +973,17 @@ mod adapter_tests {
             )
             .unwrap();
             assert_eq!(source.entries.len(), 5);
+            for (key, hint) in [
+                ("web docs", "Opens the documentation"),
+                ("paths repo", "Opens repo"),
+            ] {
+                let entry = source
+                    .entries
+                    .iter()
+                    .find(|entry| entry.key.join(" ") == key)
+                    .unwrap();
+                assert_eq!(entry.hint.as_deref(), Some(hint), "{extension}: {key}");
+            }
             snapshots.push(serde_yaml_ng::to_string(&source.entries).unwrap());
         }
         assert!(snapshots.windows(2).all(|pair| pair[0] == pair[1]));

@@ -1,6 +1,6 @@
 [package]
 name = "qrlkit"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "Quick Resource Locator: open named URLs from imported TOML files"
 license = "MIT"
@@ -16,3 +16,4 @@ serde_yaml_ng = "0.10"
 tempfile = "3"
 toml = "1.1"
 url = "2"
+yaml-rust2 = { version = "0.10", default-features = false }

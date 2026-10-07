@@ -18,6 +18,8 @@ pub struct Browser {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<String>,
     pub key: Vec<String>,
     // Keep the original YAML field name for compatibility with URL-only state.
@@ -264,6 +266,7 @@ mod tests {
             ]
             .into_iter()
             .map(|key| Entry {
+                hint: None,
                 browser: None,
                 key: key.into_iter().map(String::from).collect(),
                 url: "https://example.com".into(),
@@ -295,6 +298,7 @@ mod tests {
             path: "team.toml".into(),
             renames: BTreeMap::new(),
             entries: vec![Entry {
+                hint: None,
                 browser: None,
                 key: vec!["git".into(), "prs".into()],
                 url: "https://example.com".into(),

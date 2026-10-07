@@ -2,6 +2,7 @@
 """Exercise interactive init through a real PTY, using isolated state/startup files."""
 import errno
 import fcntl
+import json
 import os
 from pathlib import Path
 import pty
@@ -77,6 +78,7 @@ def run_interactive(root, answers, success=True, command=("init",)):
             os.kill(pid, signal.SIGKILL)
             os.waitpid(pid, 0)
         os.close(fd)
+    return transcript
 
 
 # The manual-path fallback makes this test independent of installed browsers.
@@ -175,3 +177,35 @@ with tempfile.TemporaryDirectory(prefix="qrl-collision-test-") as directory:
     state = (root / "state.yaml").read_text()
     assert "\ncollision_strategy: merge\n" in state
     assert "- collision_strategy: rename\n" in state
+
+
+for extension in ("toml", "yaml", "yml", "json"):
+    with tempfile.TemporaryDirectory(prefix="qrl-hint-test-") as directory:
+        root = Path(directory)
+        source = root / f"hints.{extension}"
+        target = root / "repo.txt"
+        target.write_text("repo")
+        if extension == "toml":
+            source.write_text(f"[web]\nplain = '{target}'\n# hint: Opens repo\nrepo = '{target}'\n")
+        elif extension in ("yaml", "yml"):
+            source.write_text(f"web:\n  plain: {target}\n  # hint: Opens repo\n  repo: {target}\n")
+        else:
+            source.write_text(json.dumps({"web": {"plain": str(target), "repo": {"url": str(target), "hint": "Opens repo"}}}))
+        env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+        subprocess.run(
+            [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+            env=env, capture_output=True, check=True,
+        )
+        transcript = run_interactive(root, [
+            ("repo        Opens repo", b"\x1b[B\r"),
+        ], command=("web",))
+        assert str(target.resolve()).encode() in transcript
+        source.write_text(source.read_text().replace("Opens repo", "Updated hint"))
+        run_interactive(root, [("repo        Updated hint", b"\x1b[B\r")], command=("web",))
+        direct = subprocess.run(
+            [str(BINARY), "--config", str(root / "state.yaml"), "web", "repo"],
+            env=env, capture_output=True, text=True, check=True,
+        )
+        assert direct.stdout.strip() == str(target.resolve())
+
+print("Resource hints: rendering, selection, automatic reload, and direct lookup passed")

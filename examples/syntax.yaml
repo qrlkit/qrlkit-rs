@@ -2,9 +2,11 @@
 
 # Open a URL
 web:
+  # hint: Opens the documentation
   docs: https://docs.rs/ratatui/latest/ratatui/
 # Relative to your shell: change directory or print a file path
 paths:
+  # hint: Opens repo
   repo: ./
   # Absolute path
   project: /home/bob/work/project
