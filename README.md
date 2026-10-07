@@ -131,7 +131,7 @@ Current version is 0.5.5 but any minor version can ship with a breaking change u
 - [x] dir hooks
 - [x] browser hooks
 - [x] run shell scripts
-- [ ] automatic docs
+- [x] automatic hints
 - [ ] hardcoded arg suggestions
 - [ ] constants 
 
@@ -234,6 +234,27 @@ kubectl logs --namespace "$1" "$2" --follow
 '''
 shell = "zsh"
 ```
+
+**hints**
+
+Comments with `hint: ` in them will be included in the terminal.
+
+```toml
+[launch]
+# hint: Find your next mission
+issues = "https://github.com/ratatui/ratatui/issues"
+
+# hint: Browse the source code
+repo = "https://github.com/ratatui/ratatui"
+```
+
+Run `qrlkit launch` after importing the config:
+
+```text
+> issues        Find your next mission
+  repo      Browse the source code
+```
+
 
 ## Contributing
 
