@@ -73,7 +73,7 @@ and 2) have as little friction as possible:
 
 - If you forget something run `qrlkit` to run any imported tool
 - `qrlkit` will suggest the next keys if you get stuck
-
+- you don't need to do the `qrlkit init`. Tool will ask for defaults when needed. 
 
 ## Install
 
@@ -117,7 +117,7 @@ Current version is 0.5.5 but any minor version can ship with a breaking change u
 - [x] set-filehook <command>
 - [x] set-dirhook <command>
 - [x] nuke
-- [ ] merge keys collisions
+- [x] set-collision-strategy <rename | merge> 
 
 #### config ####
 
@@ -155,6 +155,7 @@ Current version is 0.5.5 but any minor version can ship with a breaking change u
 | `qrlkit ls` | List registered config files |
 | `qrlkit rm <path>` | Unregister a config; keep the file |
 | `qrlkit reload` | Refresh imports and retry shell setup |
+| `qrlkit set-collision-strategy <strategy>` | Choose `merge` (default) to combine shared namespaces or `rename` to rename conflicting roots |
 | `qrlkit set-browser` | Choose the default browser |
 | `qrlkit set-filehook <command>` | Choose the default file action (`--clear` restores path printing) |
 | `qrlkit set-dirhook <command>` | Choose the directory hook (`--clear` restores changing directory) |

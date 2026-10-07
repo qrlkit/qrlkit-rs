@@ -9,6 +9,7 @@ import re
 import select
 import signal
 import struct
+import subprocess
 import sys
 import tempfile
 import termios
@@ -17,14 +18,14 @@ import time
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/qrlkit").resolve()
 
 
-def run_init(root, answers, success=True):
+def run_interactive(root, answers, success=True, command=("init",)):
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.update(
             HOME=str(root), ZDOTDIR=str(root), XDG_CONFIG_HOME=str(root),
             SHELL="/bin/zsh", TERM="xterm-256color",
         )
-        os.execv(str(BINARY), [str(BINARY), "--config", str(root / "state.yaml"), "init"])
+        os.execv(str(BINARY), [str(BINARY), "--config", str(root / "state.yaml"), *command])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 180, 0, 0))
     transcript = b""
     pending = b""
@@ -88,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix="qrl-init-test-") as directory:
     root = Path(directory)
     startup = root / ".zshrc"
     startup.write_text("export KEEP_ME=yes\n")
-    run_init(root, BROWSER + [
+    run_interactive(root, BROWSER + [
         ("Choose shell:", b"\r"),
         ("Filehook command", b"\r"),
         ("Dirhook command", b"\r"),
@@ -99,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="qrl-init-test-") as directory:
     assert "QRL shell integration" in startup.read_text()
     assert (root / ".zshrc.qrl-backup").read_text() == "export KEEP_ME=yes\n"
 
-    run_init(root, BROWSER + [
+    run_interactive(root, BROWSER + [
         ("Choose shell:", b"unsupported\r"),
         ("Unsupported shell.", b"fish\r"),
         ("Filehook command", b"cat $file\r"),
@@ -113,14 +114,14 @@ with tempfile.TemporaryDirectory(prefix="qrl-init-test-") as directory:
 
     # Cancellation must not replace existing settings or startup files.
     before = (root / "state.yaml").read_bytes()
-    run_init(root, BROWSER + [
+    run_interactive(root, BROWSER + [
         ("Choose shell:", b"\r"),
         ("Filehook command", b"\x03"),
     ], success=False)
     assert (root / "state.yaml").read_bytes() == before
 
     # Empty hook inputs restore defaults on subsequent runs as well.
-    run_init(root, BROWSER + [
+    run_interactive(root, BROWSER + [
         ("Choose shell:", b"\r"),
         ("Filehook command", b"\r"),
         ("Dirhook command", b"\r"),
@@ -130,3 +131,47 @@ with tempfile.TemporaryDirectory(prefix="qrl-init-test-") as directory:
     assert startup.read_text().count("# >>> QRL shell integration >>>") == 1
 
 print("Interactive init: defaults, custom settings, validation, cancellation, and rerun passed")
+
+
+with tempfile.TemporaryDirectory(prefix="qrl-collision-test-") as directory:
+    root = Path(directory)
+    first = root / "first.toml"
+    second = root / "second.toml"
+    first.write_text("[qk.git.prs]\nrun = 'printf first'\n")
+    second.write_text("[qk.git.prs]\nrun = 'printf second'\n")
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+
+    def run(*args):
+        return subprocess.run(
+            [str(BINARY), "--config", str(root / "state.yaml"), *args],
+            env=env, capture_output=True, text=True, check=True,
+        ).stdout
+
+    run("add", str(first))
+    run_interactive(root, [
+        ("choose the namespace to rename", b"\r"),
+        ("Rename qrlkit qk git prs: enter a new name", b"team-prs\r"),
+    ], command=("add", str(second)))
+    run("reload")
+    assert run("qk", "git", "team-prs") == "first"
+    assert run("qk", "git", "prs") == "second"
+    run_interactive(root, [
+        ("choose the namespace to rename", b"\r"),
+        ("Rename qrlkit qk: enter a new name", b"team-qk\r"),
+    ], command=("set-collision-strategy", "rename"))
+    run("set-collision-strategy", "merge")
+    run("reload")
+    assert run("team-qk", "git", "team-prs") == "first"
+    assert run("qk", "git", "prs") == "second"
+
+    third = root / "third.toml"
+    third.write_text("[qk.git.other]\nrun = 'printf third'\n")
+    run_interactive(root, [
+        ("choose the namespace to rename", b"\x1b[B\r"),
+        ("Rename qrlkit qk: enter a new name", b"third-qk\r"),
+    ], command=("add", str(third), "--collision-strategy", "rename"))
+    run("reload")
+    assert run("third-qk", "git", "other") == "third"
+    state = (root / "state.yaml").read_text()
+    assert "\ncollision_strategy: merge\n" in state
+    assert "- collision_strategy: rename\n" in state

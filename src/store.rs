@@ -33,18 +33,31 @@ pub struct Entry {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Source {
+    /// Explicit per-file override; absent means use the global default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collision_strategy: Option<CollisionStrategy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
     pub path: PathBuf,
-    /// Original root -> effective root. Retained across reloads.
+    /// Original path -> effective path, separated by spaces. Retained across reloads.
     #[serde(default)]
     pub renames: BTreeMap<String, String>,
     pub entries: Vec<Entry>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum CollisionStrategy {
+    #[default]
+    Merge,
+    Rename,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct State {
     pub version: u32,
+    #[serde(default)]
+    pub collision_strategy: CollisionStrategy,
     pub browser: Option<Browser>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<crate::shell::Shell>,
@@ -59,6 +72,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             version: 1,
+            collision_strategy: CollisionStrategy::default(),
             browser: None,
             shell: None,
             filehook: None,
@@ -128,7 +142,9 @@ impl State {
             }
             for (original, alias) in &source.renames {
                 ensure!(
-                    crate::import::valid_segment(original) && crate::import::valid_segment(alias),
+                    original.split(' ').all(crate::import::valid_segment)
+                        && alias.split(' ').all(crate::import::valid_segment)
+                        && original.split(' ').count() == alias.split(' ').count(),
                     "Invalid namespace rename in {}",
                     source.path.display()
                 );
@@ -236,6 +252,7 @@ mod tests {
     fn children_are_immediate_sorted_unique_and_prefix_scoped() {
         let mut state = State::default();
         state.sources.push(Source {
+            collision_strategy: None,
             alias: None,
             path: "test.toml".into(),
             renames: BTreeMap::new(),
@@ -273,6 +290,7 @@ mod tests {
         let path = dir.path().join("nested/state.yaml");
         let mut state = State::default();
         state.sources.push(Source {
+            collision_strategy: None,
             alias: None,
             path: "team.toml".into(),
             renames: BTreeMap::new(),

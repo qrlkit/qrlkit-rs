@@ -29,7 +29,7 @@ struct Cli {
     config: Option<PathBuf>,
     #[arg(long, hide = true)]
     source: Option<PathBuf>,
-    #[arg(long, hide = true, requires = "source")]
+    #[arg(long, hide = true)]
     root: Option<String>,
     #[command(subcommand)]
     command: Option<Commands>,
@@ -38,13 +38,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Register a config file or all TOML/YAML/JSON files directly in a directory
-    Add { path: PathBuf },
+    Add {
+        path: PathBuf,
+        /// Save a collision strategy for newly imported files, including future reloads.
+        /// When both files have overrides, the more recently added file wins.
+        #[arg(long, value_enum)]
+        collision_strategy: Option<store::CollisionStrategy>,
+    },
     /// List registered config files and their effective namespaces
     Ls,
     /// Remove an imported file, including when it no longer exists
     Rm { path: PathBuf },
     /// Refresh all imports, preserving namespace renames
     Reload,
+    /// Choose how shared namespaces are resolved (default: merge)
+    SetCollisionStrategy { strategy: store::CollisionStrategy },
     /// Choose the default browser
     SetBrowser,
     /// Set the default file shell command; use an unquoted $file placeholder for the path
@@ -80,9 +88,9 @@ enum Commands {
     Lookup(Vec<String>),
 }
 
-fn resolve(sources: &mut [store::Source]) -> Result<()> {
+fn resolve(sources: &mut [store::Source], strategy: store::CollisionStrategy) -> Result<()> {
     alias::validate(sources)?;
-    while let Some((a, b, root)) = import::collision(sources) {
+    while let Some((a, b, root)) = import::collision(sources, strategy) {
         let index = if a == b {
             a
         } else {
@@ -92,7 +100,7 @@ fn resolve(sources: &mut [store::Source]) -> Result<()> {
                 &choices,
             )?]
         };
-        let mut title = format!("Rename qrlkit {root}: enter a new root, e.g. team2-{root}");
+        let mut title = format!("Rename qrlkit {root}: enter a new name");
         loop {
             let alias = ui::input(&title)?;
             match import::rename(&mut sources[index], &root, &alias) {
@@ -185,11 +193,12 @@ fn run() -> Result<i32> {
             | Commands::Reload
             | Commands::SetFilehook { .. }
             | Commands::SetDirhook { .. }
+            | Commands::SetCollisionStrategy { .. }
     ) && !state.sources.is_empty()
     {
         let before = serde_yaml_ng::to_string(&state)?;
         state.sources = import::reload(&state.sources)?;
-        resolve(&mut state.sources)?;
+        resolve(&mut state.sources, state.collision_strategy)?;
         if serde_yaml_ng::to_string(&state)? != before {
             state.save(&path)?;
             setup::for_aliases(&state, &path)?;
@@ -216,13 +225,7 @@ fn run() -> Result<i32> {
                     continue;
                 }
                 for entry in &mut source.entries {
-                    if let Some((original, _)) = source
-                        .renames
-                        .iter()
-                        .find(|(_, alias)| **alias == entry.key[0])
-                    {
-                        entry.key[0] = original.clone();
-                    }
+                    entry.key = import::map_key(&entry.key, &source.renames, true);
                 }
             }
             &scoped
@@ -300,7 +303,10 @@ fn run() -> Result<i32> {
         return Ok(0);
     }
     match command {
-        Commands::Add { path: source_path } => {
+        Commands::Add {
+            path: source_path,
+            collision_strategy,
+        } => {
             let directory = source_path.is_dir();
             let mut registered: std::collections::BTreeSet<_> =
                 state.sources.iter().map(|s| s.path.clone()).collect();
@@ -311,7 +317,9 @@ fn run() -> Result<i32> {
                     ensure!(directory, "File already imported; use qrlkit reload");
                     continue;
                 }
-                additions.push(import::read(&candidate, Default::default())?);
+                let mut source = import::read(&candidate, Default::default())?;
+                source.collision_strategy = collision_strategy;
+                additions.push(source);
             }
             if additions.is_empty() {
                 println!(
@@ -323,7 +331,7 @@ fn run() -> Result<i32> {
             let imported: Vec<_> = additions.iter().map(|s| s.path.clone()).collect();
             state.sources = import::reload(&state.sources)?;
             state.sources.extend(additions);
-            resolve(&mut state.sources)?;
+            resolve(&mut state.sources, state.collision_strategy)?;
             state.save(&path)?;
             for source in imported {
                 println!("Imported {}", source.display());
@@ -334,7 +342,7 @@ fn run() -> Result<i32> {
         }
         Commands::Reload => {
             state.sources = import::reload(&state.sources)?;
-            resolve(&mut state.sources)?;
+            resolve(&mut state.sources, state.collision_strategy)?;
             state.save(&path)?;
             println!("Reloaded {} file(s)", state.sources.len());
             setup::for_aliases(&state, &path)?;
@@ -393,6 +401,22 @@ fn run() -> Result<i32> {
                 .context("Directory hook saved, but shell setup failed; run qrlkit reload")?;
             println!(
                 "Directory hook saved. Open a new terminal to activate updated shell integration."
+            );
+        }
+        Commands::SetCollisionStrategy { strategy } => {
+            state.sources = import::reload(&state.sources)?;
+            resolve(&mut state.sources, strategy)?;
+            state.collision_strategy = strategy;
+            state.save(&path)?;
+            setup::for_aliases(&state, &path)?;
+            setup::for_directories(&state)
+                .context("Collision strategy saved, but directory shell setup failed")?;
+            println!(
+                "Collision strategy set to {}",
+                match strategy {
+                    store::CollisionStrategy::Merge => "merge",
+                    store::CollisionStrategy::Rename => "rename",
+                }
             );
         }
         Commands::SetBrowser => {

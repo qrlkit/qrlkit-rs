@@ -142,7 +142,7 @@ fn add_collision_and_reserved_roots_fail_without_a_terminal_and_preserve_state()
     let before = fs::read(&config).unwrap();
     let second = dir.path().join("second.toml");
     for root in ["git", "nuke", "help", "add"] {
-        fs::write(&second, format!("[{root}]\nother = 'https://example.com'")).unwrap();
+        fs::write(&second, format!("[{root}]\nprs = 'https://example.com'")).unwrap();
         let result = run(&config, &["add", second.to_str().unwrap()]);
         assert!(!result.status.success());
         assert!(String::from_utf8_lossy(&result.stderr).contains("interactive terminal"));
@@ -169,7 +169,7 @@ fn reload_is_atomic_across_multiple_files_and_new_collisions() {
     fs::write(&a, "[git]\nprs = 'https://new.test'").unwrap();
     for text in [
         "bad = [",
-        "[git]\nissues = 'https://issues.test'",
+        "[git]\nprs = 'https://issues.test'",
         "[nuke]\napi = 'https://logs.test'",
     ] {
         fs::write(&b, text).unwrap();
@@ -725,8 +725,8 @@ fn directory_import_failures_leave_state_and_shell_setup_unchanged() {
     .unwrap();
     for bad in [
         "broken = [",
-        "[docs]\nother = 'https://example.com'",
-        "[existing]\nother = 'https://example.com'",
+        "[docs]\nlink = 'https://example.com'",
+        "[existing]\nlink = 'https://example.com'",
     ] {
         fs::write(sources.join("z.toml"), bad).unwrap();
         assert!(
@@ -1006,4 +1006,254 @@ fn filehooks_execute_shell_chains_pipes_redirects_and_local_overrides() {
     let output = run(&config, &["notes", "item"]);
     assert!(output.status.success());
     assert_eq!(output.stdout, b"hello\nlocal");
+}
+
+#[test]
+fn merge_is_default_and_strategy_changes_are_atomic() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let a = dir.path().join("a.toml");
+    let b = dir.path().join("b.json");
+    fs::write(&a, "[qk.git.a]\nrun = 'printf first'").unwrap();
+    fs::write(&b, r#"{"qk":{"git":{"b":{"run":"printf second"}}}}"#).unwrap();
+    for source in [&a, &b] {
+        let output = run(&config, &["add", source.to_str().unwrap()]);
+        assert!(output.status.success(), "{output:?}");
+    }
+    for (key, expected) in [("a", "first"), ("b", "second")] {
+        let result = run(&config, &["qk", "git", key]);
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(result.stdout, expected.as_bytes());
+    }
+    let before = fs::read(&config).unwrap();
+    for args in [
+        vec!["set-collision-strategy", "rename"],
+        vec!["--set-collision-strategy", "rename"],
+        vec!["set-collision-strategy", "invalid"],
+        vec!["--set-collision-strategy", "merge", "ls"],
+    ] {
+        assert!(!run(&config, &args).status.success());
+        assert_eq!(fs::read(&config).unwrap(), before);
+    }
+    assert!(run(&config, &["rm", b.to_str().unwrap()]).status.success());
+    assert!(
+        run(&config, &["set-collision-strategy", "rename"])
+            .status
+            .success()
+    );
+    let before = fs::read(&config).unwrap();
+    assert!(!run(&config, &["add", b.to_str().unwrap()]).status.success());
+    assert_eq!(fs::read(&config).unwrap(), before);
+    assert!(
+        run(&config, &["set-collision-strategy", "merge"])
+            .status
+            .success()
+    );
+    assert!(run(&config, &["add", b.to_str().unwrap()]).status.success());
+    assert!(run(&config, &["reload"]).status.success());
+}
+
+#[test]
+fn merged_shell_shortcut_reaches_both_sources_and_explicit_alias_keeps_original_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let a = dir.path().join("a.toml");
+    let b = dir.path().join("b.toml");
+    fs::write(
+        &a,
+        "[alias]\nname = 'qrl-test-own'\n[qk.git.a]\nrun = 'printf first'",
+    )
+    .unwrap();
+    fs::write(&b, "[qk.git.b]\nrun = 'printf second'").unwrap();
+    for source in [&a, &b] {
+        assert!(
+            run(&config, &["add", source.to_str().unwrap()])
+                .status
+                .success()
+        );
+    }
+    let mut state: serde_json::Value =
+        serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    state["sources"][0]["renames"]["qk git a"] = "qk git renamed".into();
+    state["sources"][0]["entries"][0]["key"][2] = "renamed".into();
+    fs::write(&config, serde_yaml_ng::to_string(&state).unwrap()).unwrap();
+    let aliases = run(&config, &["__aliases", "bash"]);
+    assert!(aliases.status.success());
+    assert!(!String::from_utf8_lossy(&aliases.stderr).contains("cannot create command"));
+    let aliases = String::from_utf8(aliases.stdout).unwrap();
+    assert_eq!(aliases.matches("qk()").count(), 1);
+    let mut paths = vec![
+        Path::new(env!("CARGO_BIN_EXE_qrlkit"))
+            .parent()
+            .unwrap()
+            .to_path_buf(),
+    ];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    let output = Command::new("bash")
+        .args([
+            "-c",
+            &format!("{aliases}\nqk git renamed && qk git b && qrl-test-own qk git a"),
+        ])
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .env("SHELL", "/bin/zsh")
+        .env("ZDOTDIR", dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"firstsecondfirst");
+}
+
+#[test]
+fn add_collision_strategy_requires_a_valid_value_and_is_scoped_to_add() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let source = dir.path().join("source.toml");
+    fs::write(&source, "[qk]\nlink = 'https://example.com'").unwrap();
+    let before = fs::read(&config).unwrap();
+    for args in [
+        vec![
+            "add",
+            source.to_str().unwrap(),
+            "--collision-strategy",
+            "invalid",
+        ],
+        vec!["add", source.to_str().unwrap(), "--collision-strategy"],
+        vec!["reload", "--collision-strategy", "merge"],
+    ] {
+        let output = run(&config, &args);
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(fs::read(&config).unwrap(), before);
+    }
+    let help = run(&config, &["add", "--help"]);
+    assert!(help.status.success());
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(text.contains("--collision-strategy"));
+    assert!(text.contains("merge") && text.contains("rename"));
+}
+
+#[test]
+fn add_merge_override_survives_reload_without_changing_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let first = dir.path().join("first.toml");
+    let second = dir.path().join("second.toml");
+    fs::write(&first, "[qk]\nfirst = './first.toml'").unwrap();
+    fs::write(&second, "[qk]\nsecond = './second.toml'").unwrap();
+    assert!(
+        run(&config, &["set-collision-strategy", "rename"])
+            .status
+            .success()
+    );
+    assert!(
+        run(&config, &["add", first.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let result = run(
+        &config,
+        &[
+            "add",
+            second.to_str().unwrap(),
+            "--collision-strategy",
+            "merge",
+        ],
+    );
+    assert!(result.status.success(), "{result:?}");
+    assert!(run(&config, &["reload"]).status.success());
+    for key in ["first", "second"] {
+        let result = run(&config, &["qk", key]);
+        assert!(result.status.success(), "{result:?}");
+        assert!(String::from_utf8_lossy(&result.stdout).ends_with(&format!("{key}.toml\n")));
+    }
+    let state: serde_json::Value = serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert_eq!(state["collision_strategy"], "rename");
+    assert!(state["sources"][0].get("collision_strategy").is_none());
+    assert_eq!(state["sources"][1]["collision_strategy"], "merge");
+    // Exact resource conflicts still prompt, even with a merge override.
+    let third = dir.path().join("third.toml");
+    fs::write(&third, "[qk]\nsecond = './third.toml'").unwrap();
+    let before = fs::read(&config).unwrap();
+    let output = run(
+        &config,
+        &[
+            "add",
+            third.to_str().unwrap(),
+            "--collision-strategy",
+            "merge",
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("interactive terminal"));
+    assert_eq!(fs::read(&config).unwrap(), before);
+}
+
+#[test]
+fn add_directory_override_applies_only_to_new_files_and_rename_failure_is_atomic() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let sources = dir.path().join("configs");
+    fs::create_dir(&sources).unwrap();
+    let first = sources.join("first.toml");
+    fs::write(&first, "[qk]\nfirst = './first.toml'").unwrap();
+    assert!(
+        run(&config, &["add", first.to_str().unwrap()])
+            .status
+            .success()
+    );
+    fs::write(
+        sources.join("second.json"),
+        r#"{"qk":{"second":"./second.json"}}"#,
+    )
+    .unwrap();
+    fs::write(sources.join("third.yaml"), "qk:\n  third: ./third.yaml\n").unwrap();
+    let before = fs::read(&config).unwrap();
+    let output = run(
+        &config,
+        &[
+            "add",
+            "--collision-strategy",
+            "rename",
+            sources.to_str().unwrap(),
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("interactive terminal"));
+    assert_eq!(fs::read(&config).unwrap(), before);
+    assert!(
+        run(&config, &["set-collision-strategy", "rename"])
+            .status
+            .success()
+    );
+    let output = run(
+        &config,
+        &[
+            "add",
+            "--collision-strategy",
+            "merge",
+            sources.to_str().unwrap(),
+        ],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(run(&config, &["reload"]).status.success());
+    let state: serde_json::Value = serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    assert_eq!(state["collision_strategy"], "rename");
+    assert!(state["sources"][0].get("collision_strategy").is_none());
+    for index in [1, 2] {
+        assert_eq!(state["sources"][index]["collision_strategy"], "merge");
+    }
+    let before = fs::read(&config).unwrap();
+    assert!(
+        run(
+            &config,
+            &[
+                "add",
+                sources.to_str().unwrap(),
+                "--collision-strategy",
+                "rename"
+            ]
+        )
+        .status
+        .success()
+    );
+    assert_eq!(fs::read(&config).unwrap(), before);
 }

@@ -155,7 +155,7 @@ fn collisions(ext: &'static str) {
     f.write(json!({"web":{"a":"https://a.test"}}));
     f.add();
     let other = f.dir.path().join("other.toml");
-    fs::write(&other, "[web]\nb = 'https://b.test'").unwrap();
+    fs::write(&other, "[web]\na = 'https://b.test'").unwrap();
     let before = fs::read(&f.config).unwrap();
     assert!(!f.run(&["add", other.to_str().unwrap()]).status.success());
     assert_eq!(before, fs::read(&f.config).unwrap());
