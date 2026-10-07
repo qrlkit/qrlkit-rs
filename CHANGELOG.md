@@ -1,3 +1,6 @@
+## 0.8.0
+- Add hints from config
+
 ## 0.7.0
 - Add set-collision-strategy
 
