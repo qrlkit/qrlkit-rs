@@ -16,4 +16,4 @@ serde_yaml_ng = "0.10"
 tempfile = "3"
 toml = "1.1"
 url = "2"
-yaml-rust2 = { version = "0.10", default-features = false }
+yaml-rust2 = { version = "0.13", default-features = false }
