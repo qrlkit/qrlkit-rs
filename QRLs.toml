@@ -1,6 +1,13 @@
 
+[constants]
+release_types = ["major", "minor", "patch"]
+
 # Use qk prep-release patch "Bump deps"
 [qk.prep-release]
+args = [
+  { name = "type", enum = { ref = "constants.release_types" } },
+  { name = "note" },
+]
 run = """
 TYPE="${1:?Usage: ./release.sh <major|minor|patch> \"release note\"}"
 NOTE="${2:?Missing release note}"

@@ -14,6 +14,8 @@ pub fn run(hook: &str, path: &Path) -> Result<i32> {
         body: format!("qrl_hook_file=$1\n{expanded}"),
         shell: "bash".into(),
         cwd: std::env::current_dir()?,
+        args: None,
+        env: Default::default(),
     }
     .run(&[path.to_str().context("File path is not UTF-8")?.into()])
 }

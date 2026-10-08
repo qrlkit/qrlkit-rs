@@ -2,13 +2,14 @@
 use anyhow::{Context, Result, bail, ensure};
 use serde::{
     Deserialize, Deserializer,
-    de::{self, MapAccess, Visitor},
+    de::{self, MapAccess, SeqAccess, Visitor},
 };
 use std::{collections::BTreeMap, fmt, path::Path};
 
 pub enum Node {
     String(String),
     Table(BTreeMap<String, Node>),
+    Array(Vec<Node>),
 }
 
 impl Node {
@@ -21,17 +22,24 @@ impl Node {
 }
 
 // Deserialize directly rather than through generic values, which can silently
-// discard duplicate keys. All formats enforce the same string/object schema.
+// discard duplicate keys. All formats enforce the same string/object/array schema.
 impl<'de> Deserialize<'de> for Node {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct ResourceVisitor;
         impl<'de> Visitor<'de> for ResourceVisitor {
             type Value = Node;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a resource string or object")
+                f.write_str("a string, object, or array")
             }
             fn visit_str<E: de::Error>(self, value: &str) -> Result<Node, E> {
                 Ok(Node::String(value.into()))
+            }
+            fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Node, S::Error> {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element()? {
+                    values.push(value);
+                }
+                Ok(Node::Array(values))
             }
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Node, M::Error> {
                 let mut result = BTreeMap::new();
@@ -114,6 +122,10 @@ pub fn toml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
                 fn visit_str<E: de::Error>(self, _: &str) -> Result<Keys, E> {
                     Ok(Keys(vec![]))
                 }
+                fn visit_seq<S: SeqAccess<'de>>(self, mut seq: S) -> Result<Keys, S::Error> {
+                    while seq.next_element::<de::IgnoredAny>()?.is_some() {}
+                    Ok(Keys(vec![]))
+                }
                 fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Keys, M::Error> {
                     let mut keys = vec![];
                     while let Some(entry) = map.next_entry()? {
@@ -163,8 +175,25 @@ pub fn yaml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
     let mut parser = Parser::new_from_str(text);
     let mut keys: Vec<Option<String>> = vec![];
     let mut hints = BTreeMap::new();
+    let mut sequence_depth = 0;
     loop {
         let (event, marker) = parser.next_token()?;
+        if matches!(event, Event::SequenceStart(..)) {
+            sequence_depth += 1;
+            continue;
+        }
+        if matches!(event, Event::SequenceEnd) {
+            sequence_depth -= 1;
+            if sequence_depth == 0
+                && let Some(key) = keys.last_mut()
+            {
+                *key = None;
+            }
+            continue;
+        }
+        if sequence_depth > 0 {
+            continue;
+        }
         match event {
             Event::MappingStart(..) => keys.push(None),
             Event::MappingEnd => {
@@ -220,7 +249,6 @@ mod tests {
         for (ext, text) in [
             ("json", "{\"x\":true}"),
             ("json", "{\"x\":null}"),
-            ("json", "{\"x\":[]}"),
             ("json", "[]"),
             ("json", "\"https://example.com\""),
             ("json", "{\"x\":\"a\",\"x\":\"b\"}"),
@@ -229,7 +257,6 @@ mod tests {
             ("yaml", "x: true"),
             ("yaml", "x: 42"),
             ("yaml", "x: null"),
-            ("yaml", "x: []"),
             ("yaml", "[]"),
             ("yaml", "42: value"),
             ("yaml", "x: a\nx: b"),

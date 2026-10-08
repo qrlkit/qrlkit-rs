@@ -209,3 +209,60 @@ for extension in ("toml", "yaml", "yml", "json"):
         assert direct.stdout.strip() == str(target.resolve())
 
 print("Resource hints: rendering, selection, automatic reload, and direct lookup passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-enum-test-") as directory:
+    root = Path(directory)
+    source = root / "tasks.toml"
+    source.write_text('''
+[constants]
+environments = ["dev", "staging", "prod"]
+[deploy]
+run = 'printf "%s/%s" "$1" "$2" > selected'
+args = [
+    { name = "environment", enum = { ref = "constants.environments" } },
+    { name = "region", enum = ["eu", "us"] },
+]
+''')
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+        env=env, capture_output=True, check=True,
+    )
+    run_interactive(root, [
+        ("environment:", b"\x1b[B\r"),
+        ("region:", b"\x1b[B\r"),
+    ], command=("deploy",))
+    assert (root / "selected").read_text() == "staging/us"
+    run_interactive(root, [("region:", b"\r")], command=("deploy", "prod"))
+    assert (root / "selected").read_text() == "prod/eu"
+    (root / "selected").unlink()
+    run_interactive(root, [("environment:", b"\x1b")], success=False, command=("deploy",))
+    assert not (root / "selected").exists()
+
+print("Enum arguments: full and partial selection, ordering, and cancellation passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-text-arg-test-") as directory:
+    root = Path(directory)
+    source = root / "tasks.toml"
+    source.write_text('''
+[prepare]
+run = 'printf "%s/%s" "$1" "$2" > selected'
+args = [
+    { name = "type", enum = ["major", "minor", "patch"] },
+    { name = "note" },
+]
+''')
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+        env=env, capture_output=True, check=True,
+    )
+    run_interactive(root, [
+        ("type:", b"\x1b[B\x1b[B\r"),
+        ("note:", b"Bump deps\r"),
+    ], command=("prepare",))
+    assert (root / "selected").read_text() == "patch/Bump deps"
+    run_interactive(root, [("note:", b"New feature\r")], command=("prepare", "minor"))
+    assert (root / "selected").read_text() == "minor/New feature"
+
+print("Mixed enum and free-text arguments: full and partial prompting passed")

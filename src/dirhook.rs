@@ -22,6 +22,8 @@ pub fn run(hook: &str, path: &Path) -> Result<(i32, Option<PathBuf>)> {
         body,
         shell: "bash".into(),
         cwd: std::env::current_dir()?,
+        args: None,
+        env: Default::default(),
     }
     .run(&[
         path.to_str().context("Directory path is not UTF-8")?.into(),
