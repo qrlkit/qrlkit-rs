@@ -1,5 +1,10 @@
 # qrlkit add examples/syntax.toml
 
+# Reusable values local to this file
+[constants]
+root = "/home/bob/work"
+release_types = ["major", "minor", "patch"]
+
 # Open a URL
 [web]
 # hint: Opens the documentation
@@ -10,13 +15,30 @@ docs = "https://docs.rs/ratatui/latest/ratatui/"
 # hint: Opens repo
 repo = "./"
 # Absolute path
-project = "/home/bob/work/project"
+project = "{constants.root}/project"
 readme = "./README.md"
 
 # qrlkit scripts greet "friend"
 [scripts.greet]
+args = [{ name = "name" }]
 run = '''
 printf 'Hello, %s!\n' "$1"
 printf 'From %s\n' "$PWD"
 '''
 shell = "bash"
+
+# qrlkit scripts prepare patch "Bump deps" eu
+# Prints a preview only. Omit arguments to use the prompts.
+[scripts.prepare]
+args = [
+  { name = "type", enum = { ref = "constants.release_types" } },
+  { name = "note" },
+  { name = "region", enum = ["eu", "us"] },
+]
+run = '''
+printf 'Release: %s\nNote: %s\nRegion: %s\nProject: %s\n' "$1" "$2" "$3" "$PROJECT_ROOT"
+'''
+shell = "bash"
+
+[scripts.prepare.env]
+PROJECT_ROOT = "{constants.root}/project"

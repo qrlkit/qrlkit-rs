@@ -994,7 +994,7 @@ quoted:
                 BTreeMap::new(),
             )
             .unwrap();
-            assert_eq!(source.entries.len(), 5);
+            assert_eq!(source.entries.len(), 6);
             for (key, hint) in [
                 ("web docs", "Opens the documentation"),
                 ("paths repo", "Opens repo"),

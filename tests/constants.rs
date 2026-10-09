@@ -272,3 +272,31 @@ fn project_release_arguments_validate_without_running_release_script() {
     );
     assert!(!root.join("injected").exists());
 }
+
+#[test]
+fn shipped_examples_execute_mixed_arguments_and_environment_across_formats() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join(format!("syntax.{extension}"));
+        success(root, &["add", source.to_str().unwrap()]);
+        let output = success(root, &["scripts", "prepare", "patch", "Bump deps", "eu"]);
+        assert_eq!(
+            output.stdout,
+            b"Release: patch\nNote: Bump deps\nRegion: eu\nProject: /home/bob/work/project\n",
+            "{extension}"
+        );
+        for args in [
+            ["scripts", "prepare", "ptach", "Bump deps", "eu"],
+            ["scripts", "prepare", "patch", "Bump deps", "unknown"],
+        ] {
+            let output = run(root, &args);
+            assert!(!output.status.success(), "{extension}");
+            assert!(output.stdout.is_empty(), "{extension}");
+        }
+        let output = success(root, &["scripts", "greet", "friend"]);
+        assert!(String::from_utf8_lossy(&output.stdout).starts_with("Hello, friend!\n"));
+    }
+}
