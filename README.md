@@ -132,8 +132,8 @@ Current version is 0.5.5 but any minor version can ship with a breaking change u
 - [x] browser hooks
 - [x] run shell scripts
 - [x] automatic hints
-- [ ] hardcoded arg suggestions
-- [ ] constants 
+- [x] hardcoded arg suggestions
+- [x] constants 
 
 #### package managers ####
 
@@ -221,18 +221,39 @@ dirhook = "cd $dir && tree -L 1"
 project = "~/dev/{repo}"
 ```
 
+**constants**
+
+Define reusable strings or lists in `[constants]`. Use `{constants.name}` in paths and URLs. For shared values, put `[constants]` in `constants.toml` beside the state file and use `{global.name}`.
+
+```toml
+[constants]
+root = "~/dev"
+namespaces = ["dev", "staging", "prod"]
+
+[projects]
+api = "{constants.root}/api"
+```
+
 **scripts**
 
 Scripts run in Bash by default from the config's directory.
 Reserved key `shell` overrides it with options `bash`, `sh`, and `zsh`.
-Use `$` notation to pass arguments.
+Use `$` notation to pass arguments. Use args to prompt users for inputs.
 
 ```toml
 [kube.logs]
+args = [
+  { name = "namespace", enum = { ref = "constants.namespaces" } },
+  { name = "pod" },
+]
 run = '''
 kubectl logs --namespace "$1" "$2" --follow
 '''
 shell = "zsh"
+```
+
+```sh
+kube logs dev my-pod
 ```
 
 **hints**
