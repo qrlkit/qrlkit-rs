@@ -252,10 +252,6 @@ kubectl logs --namespace "$1" "$2" --follow
 shell = "zsh"
 ```
 
-```sh
-kube logs dev my-pod
-```
-
 **hints**
 
 Comments with `hint: ` in them will be included in the terminal.
