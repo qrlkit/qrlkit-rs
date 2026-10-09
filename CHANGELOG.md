@@ -4,6 +4,9 @@
 ## 0.9.0
 - Support constants
 
+### 0.8.1
+- Bump dependencies
+
 ## 0.8.0
 - Add hints from config
 
