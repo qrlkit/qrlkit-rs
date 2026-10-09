@@ -269,7 +269,7 @@ Run `qrlkit launch` after importing the config:
 
 ```text
 > issues        Find your next mission
-  repo      Browse the source code
+  repo          Browse the source code
 ```
 
 
