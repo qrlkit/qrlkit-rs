@@ -56,10 +56,21 @@ pub fn valid_segment(key: &str) -> bool {
         && !key.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
+#[cfg(test)]
 pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
+    read_with_constants(path, renames, &BTreeMap::new())
+}
+
+pub fn read_with_constants(
+    path: &Path,
+    renames: BTreeMap<String, String>,
+    global: &crate::constants::Constants,
+) -> Result<Source> {
     let path = fs::canonicalize(path).with_context(|| format!("Cannot find {}", path.display()))?;
     let text = fs::read_to_string(&path)?;
     let mut value = crate::format::parse(&path, &text)?;
+    crate::constants::resolve(&mut value, global)
+        .with_context(|| format!("In {}", path.display()))?;
     let hints = match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -128,6 +139,7 @@ fn flatten(
     browser: Option<&str>,
 ) -> Result<()> {
     match value {
+        Node::Array(_) => anyhow::bail!("Arrays are only supported in constants and script args"),
         Node::Table(table) => {
             let browser = match table.get("browser") {
                 Some(value) => Some(value.as_str().context("browser must be a string")?),
@@ -179,7 +191,7 @@ fn flatten(
                 ensure!(
                     table
                         .keys()
-                        .all(|k| matches!(k.as_str(), "run" | "shell" | "hint")),
+                        .all(|k| matches!(k.as_str(), "run" | "shell" | "hint" | "args" | "env")),
                     "Script {} cannot contain child resources or unknown settings",
                     key.join(" ")
                 );
@@ -193,6 +205,8 @@ fn flatten(
                     body,
                     shell,
                     cwd: source_dir.to_path_buf(),
+                    args: crate::script::arguments(table.get("args"))?,
+                    env: crate::script::environment(table.get("env"))?,
                 };
                 script.validate()?;
                 entries.push(Entry {
@@ -355,10 +369,18 @@ pub fn rename(source: &mut Source, path: &str, alias: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn reload(sources: &[Source]) -> Result<Vec<Source>> {
+    reload_with_constants(sources, &BTreeMap::new())
+}
+
+pub fn reload_with_constants(
+    sources: &[Source],
+    global: &crate::constants::Constants,
+) -> Result<Vec<Source>> {
     sources.iter().map(|s| {
         // Validate and transform the same snapshot; do not reread a changing file.
-        let mut loaded = read(&s.path, BTreeMap::new())?;
+        let mut loaded = read_with_constants(&s.path, BTreeMap::new(), global)?;
         let mut effective = BTreeMap::new();
         for entry in &mut loaded.entries {
             for end in 1..=entry.key.len() {
@@ -972,7 +994,7 @@ quoted:
                 BTreeMap::new(),
             )
             .unwrap();
-            assert_eq!(source.entries.len(), 5);
+            assert_eq!(source.entries.len(), 6);
             for (key, hint) in [
                 ("web docs", "Opens the documentation"),
                 ("paths repo", "Opens repo"),

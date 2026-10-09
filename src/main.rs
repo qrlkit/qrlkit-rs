@@ -1,5 +1,6 @@
 mod alias;
 mod browser;
+mod constants;
 mod dirhook;
 mod filehook;
 mod format;
@@ -209,7 +210,7 @@ fn run() -> Result<i32> {
     ) && !state.sources.is_empty()
     {
         let before = serde_yaml_ng::to_string(&state)?;
-        state.sources = import::reload(&state.sources)?;
+        state.sources = import::reload_with_constants(&state.sources, &constants::load(&path)?)?;
         resolve(&mut state.sources, state.collision_strategy)?;
         if serde_yaml_ng::to_string(&state)? != before {
             state.save(&path)?;
@@ -261,6 +262,16 @@ fn run() -> Result<i32> {
             return Ok(0);
         };
         if let Some(script) = entry.script {
+            let arguments = script.resolve_arguments(&arguments, |arg| {
+                let title = format!("{}:", arg.name);
+                match &arg.choices {
+                    Some(choices) => {
+                        let index = ui::select(&title, choices)?;
+                        Ok(choices[index].clone())
+                    }
+                    None => ui::input(&title),
+                }
+            })?;
             eprintln!("qrlkit: running script..");
             return script.run(&arguments);
         }
@@ -319,6 +330,7 @@ fn run() -> Result<i32> {
             path: source_path,
             collision_strategy,
         } => {
+            let global = constants::load(&path)?;
             let directory = source_path.is_dir();
             let mut registered: std::collections::BTreeSet<_> =
                 state.sources.iter().map(|s| s.path.clone()).collect();
@@ -329,7 +341,8 @@ fn run() -> Result<i32> {
                     ensure!(directory, "File already imported; use qrlkit reload");
                     continue;
                 }
-                let mut source = import::read(&candidate, Default::default())?;
+                let mut source =
+                    import::read_with_constants(&candidate, Default::default(), &global)?;
                 source.collision_strategy = collision_strategy;
                 additions.push(source);
             }
@@ -341,7 +354,7 @@ fn run() -> Result<i32> {
                 return Ok(0);
             }
             let imported: Vec<_> = additions.iter().map(|s| s.path.clone()).collect();
-            state.sources = import::reload(&state.sources)?;
+            state.sources = import::reload_with_constants(&state.sources, &global)?;
             state.sources.extend(additions);
             resolve(&mut state.sources, state.collision_strategy)?;
             state.save(&path)?;
@@ -353,7 +366,8 @@ fn run() -> Result<i32> {
                 .context("Import saved, but directory shell setup failed")?;
         }
         Commands::Reload => {
-            state.sources = import::reload(&state.sources)?;
+            state.sources =
+                import::reload_with_constants(&state.sources, &constants::load(&path)?)?;
             resolve(&mut state.sources, state.collision_strategy)?;
             state.save(&path)?;
             println!("Reloaded {} file(s)", state.sources.len());
@@ -416,7 +430,8 @@ fn run() -> Result<i32> {
             );
         }
         Commands::SetCollisionStrategy { strategy } => {
-            state.sources = import::reload(&state.sources)?;
+            state.sources =
+                import::reload_with_constants(&state.sources, &constants::load(&path)?)?;
             resolve(&mut state.sources, strategy)?;
             state.collision_strategy = strategy;
             state.save(&path)?;

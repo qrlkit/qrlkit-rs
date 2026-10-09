@@ -1,4 +1,12 @@
 {
+  "constants": {
+    "root": "/home/bob/work",
+    "release_types": [
+      "major",
+      "minor",
+      "patch"
+    ]
+  },
   "web": {
     "docs": {
       "url": "https://docs.rs/ratatui/latest/ratatui/",
@@ -10,13 +18,43 @@
       "url": "./",
       "hint": "Opens repo"
     },
-    "project": "/home/bob/work/project",
+    "project": "{constants.root}/project",
     "readme": "./README.md"
   },
   "scripts": {
     "greet": {
       "run": "printf 'Hello, %s!\\n' \"$1\"\nprintf 'From %s\\n' \"$PWD\"\n",
-      "shell": "bash"
+      "shell": "bash",
+      "args": [
+        {
+          "name": "name"
+        }
+      ]
+    },
+    "prepare": {
+      "args": [
+        {
+          "name": "type",
+          "enum": {
+            "ref": "constants.release_types"
+          }
+        },
+        {
+          "name": "note"
+        },
+        {
+          "name": "region",
+          "enum": [
+            "eu",
+            "us"
+          ]
+        }
+      ],
+      "run": "printf 'Release: %s\\nNote: %s\\nRegion: %s\\nProject: %s\\n' \"$1\" \"$2\" \"$3\" \"$PROJECT_ROOT\"\n",
+      "shell": "bash",
+      "env": {
+        "PROJECT_ROOT": "{constants.root}/project"
+      }
     }
   }
 }
