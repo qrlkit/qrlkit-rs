@@ -1,3 +1,6 @@
+## 0.10.0
+- Add enums to URLs, files and dirs
+
 ### 0.9.3
 - Fix qrlkit rm to delete by keys instead of paths
 
