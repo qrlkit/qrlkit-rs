@@ -104,3 +104,92 @@ mod tests {
         assert!(expand("./{missing}", &[], |_| anyhow::bail!("cancelled")).is_err());
     }
 }
+
+/// Declarations cover each distinct placeholder; their order controls CLI arguments.
+pub fn validate_arguments(template: &str, args: Option<&[crate::script::Argument]>) -> Result<()> {
+    let names = names(template)?;
+    crate::script::validate_arguments(args)?;
+    if let Some(args) = args {
+        ensure!(
+            args.len() == names.len() && args.iter().all(|arg| names.contains(&arg.name)),
+            "Resource args must declare each placeholder exactly once"
+        );
+    }
+    Ok(())
+}
+
+pub fn expand_arguments(
+    template: &str,
+    args: Option<&[crate::script::Argument]>,
+    supplied: &[String],
+    mut prompt: impl FnMut(&crate::script::Argument) -> Result<String>,
+) -> Result<String> {
+    validate_arguments(template, args)?;
+    let Some(args) = args else {
+        return expand(template, supplied, |name| {
+            prompt(&crate::script::Argument {
+                name: name.to_owned(),
+                choices: None,
+            })
+        });
+    };
+    let values = crate::script::resolve_arguments(Some(args), supplied, prompt)?;
+    let ordered = names(template)?
+        .iter()
+        .map(|name| values[args.iter().position(|arg| &arg.name == name).unwrap()].clone())
+        .collect::<Vec<_>>();
+    expand(template, &ordered, |_| unreachable!())
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::*;
+    use crate::script::Argument;
+
+    #[test]
+    fn names_map_values_and_repeated_url_placeholders_encode_once() {
+        let args = [
+            Argument {
+                name: "query".into(),
+                choices: None,
+            },
+            Argument {
+                name: "repo".into(),
+                choices: Some(vec!["a /?&ø".into()]),
+            },
+        ];
+        let result = expand_arguments(
+            "https://example.com/{repo}?q={query}&again={repo}",
+            Some(&args),
+            &["hello world".into()],
+            |arg| {
+                assert_eq!(arg.name, "repo");
+                Ok(arg.choices.as_ref().unwrap()[0].clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            "https://example.com/a%20%2F%3F%26%C3%B8?q=hello%20world&again=a%20%2F%3F%26%C3%B8"
+        );
+        assert!(
+            expand_arguments(
+                "./{repo}/{query}",
+                Some(&args),
+                &["x".into(), "bad".into()],
+                |_| panic!("invalid supplied values must not prompt")
+            )
+            .is_err()
+        );
+        assert!(
+            expand_arguments("./{repo}/{query}", Some(&args), &["x".into()], |_| Ok(
+                "bad".into()
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            expand_arguments("./fixed", Some(&[]), &[], |_| panic!()).unwrap(),
+            "./fixed"
+        );
+    }
+}

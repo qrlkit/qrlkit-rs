@@ -262,22 +262,16 @@ fn run() -> Result<i32> {
             return Ok(0);
         };
         if let Some(script) = entry.script {
-            let arguments = script.resolve_arguments(&arguments, |arg| {
-                let title = format!("{}:", arg.name);
-                match &arg.choices {
-                    Some(choices) => {
-                        let index = ui::select(&title, choices)?;
-                        Ok(choices[index].clone())
-                    }
-                    None => ui::input(&title),
-                }
-            })?;
+            let arguments = script.resolve_arguments(&arguments, prompt_argument)?;
             eprintln!("qrlkit: running script..");
             return script.run(&arguments);
         }
-        let value = template::expand(&entry.url, &arguments, |name| {
-            ui::input(&format!("{name}:"))
-        })?;
+        let value = template::expand_arguments(
+            &entry.url,
+            entry.args.as_deref(),
+            &arguments,
+            prompt_argument,
+        )?;
         match resource::resolve(&value)? {
             resource::Resource::Url(url) => {
                 let override_browser = entry
@@ -473,5 +467,13 @@ fn main() {
             eprintln!("qrlkit: {error:#}");
             std::process::exit(1);
         }
+    }
+}
+
+fn prompt_argument(arg: &script::Argument) -> anyhow::Result<String> {
+    let title = format!("{}:", arg.name);
+    match &arg.choices {
+        Some(choices) => Ok(choices[ui::select(&title, choices)?].clone()),
+        None => ui::input(&title),
     }
 }

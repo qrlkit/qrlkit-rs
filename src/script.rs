@@ -108,38 +108,7 @@ impl Script {
             self.cwd.is_absolute(),
             "Script working directory must be absolute"
         );
-        if let Some(args) = &self.args {
-            let mut names = BTreeSet::new();
-            for arg in args {
-                ensure!(
-                    crate::constants::valid_name(&arg.name),
-                    "Invalid argument name: {}",
-                    arg.name
-                );
-                ensure!(
-                    names.insert(&arg.name),
-                    "Duplicate argument name: {}",
-                    arg.name
-                );
-                let Some(allowed) = &arg.choices else {
-                    continue;
-                };
-                ensure!(
-                    !allowed.is_empty(),
-                    "Enum {} must have at least one choice",
-                    arg.name
-                );
-                let mut choices = BTreeSet::new();
-                for value in allowed {
-                    ensure!(!value.contains('\0'), "Enum choices cannot contain NUL");
-                    ensure!(
-                        choices.insert(value),
-                        "Duplicate choice for {}: {value}",
-                        arg.name
-                    );
-                }
-            }
-        }
+        validate_arguments(self.args.as_deref())?;
         for (key, value) in &self.env {
             ensure!(
                 crate::constants::valid_name(key),
@@ -160,29 +129,10 @@ impl Script {
     pub fn resolve_arguments(
         &self,
         supplied: &[String],
-        mut prompt: impl FnMut(&Argument) -> Result<String>,
+        prompt: impl FnMut(&Argument) -> Result<String>,
     ) -> Result<Vec<String>> {
         self.validate()?;
-        let Some(args) = &self.args else {
-            return Ok(supplied.to_vec());
-        };
-        ensure!(
-            supplied.len() <= args.len(),
-            "Expected {} argument(s), got {}",
-            args.len(),
-            supplied.len()
-        );
-        // Reject every supplied value before opening any prompt.
-        for (arg, value) in args.iter().zip(supplied) {
-            arg.validate_value(value)?;
-        }
-        let mut values = supplied.to_vec();
-        for arg in args.iter().skip(values.len()) {
-            let value = prompt(arg)?;
-            arg.validate_value(&value)?;
-            values.push(value);
-        }
-        Ok(values)
+        resolve_arguments(self.args.as_deref(), supplied, prompt)
     }
 
     pub fn run(&self, arguments: &[String]) -> Result<i32> {
@@ -228,4 +178,68 @@ impl Argument {
         );
         Ok(())
     }
+}
+
+pub fn validate_arguments(args: Option<&[Argument]>) -> Result<()> {
+    if let Some(args) = args {
+        let mut names = BTreeSet::new();
+        for arg in args {
+            ensure!(
+                crate::constants::valid_name(&arg.name),
+                "Invalid argument name: {}",
+                arg.name
+            );
+            ensure!(
+                names.insert(&arg.name),
+                "Duplicate argument name: {}",
+                arg.name
+            );
+            let Some(allowed) = &arg.choices else {
+                continue;
+            };
+            ensure!(
+                !allowed.is_empty(),
+                "Enum {} must have at least one choice",
+                arg.name
+            );
+            let mut choices = BTreeSet::new();
+            for value in allowed {
+                ensure!(!value.contains('\0'), "Enum choices cannot contain NUL");
+                ensure!(
+                    choices.insert(value),
+                    "Duplicate choice for {}: {value}",
+                    arg.name
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn resolve_arguments(
+    args: Option<&[Argument]>,
+    supplied: &[String],
+    mut prompt: impl FnMut(&Argument) -> Result<String>,
+) -> Result<Vec<String>> {
+    validate_arguments(args)?;
+    let Some(args) = args else {
+        return Ok(supplied.to_vec());
+    };
+    ensure!(
+        supplied.len() <= args.len(),
+        "Expected {} argument(s), got {}",
+        args.len(),
+        supplied.len()
+    );
+    // Reject every supplied value before opening any prompt.
+    for (arg, value) in args.iter().zip(supplied) {
+        arg.validate_value(value)?;
+    }
+    let mut values = supplied.to_vec();
+    for arg in args.iter().skip(values.len()) {
+        let value = prompt(arg)?;
+        arg.validate_value(&value)?;
+        values.push(value);
+    }
+    Ok(values)
 }
