@@ -48,8 +48,8 @@ enum Commands {
     },
     /// List registered config files and their effective namespaces
     Ls,
-    /// Remove an imported file, including when it no longer exists
-    Rm { path: PathBuf },
+    /// Remove a key and its descendants, or choose a key interactively
+    Rm { keys: Vec<String> },
     /// Refresh all imports, preserving namespace renames
     Reload,
     /// Choose how shared namespaces are resolved (default: merge)
@@ -375,24 +375,27 @@ fn run() -> Result<i32> {
             setup::for_directories(&state)
                 .context("Reload saved, but directory shell setup failed")?;
         }
-        Commands::Rm { path: source_path } => {
-            let absolute = std::path::absolute(&source_path)?;
-            let canonical = std::fs::canonicalize(&source_path).unwrap_or_else(|_| {
-                absolute
-                    .parent()
-                    .and_then(|parent| std::fs::canonicalize(parent).ok())
-                    .zip(absolute.file_name())
-                    .map(|(parent, name)| parent.join(name))
-                    .unwrap_or(absolute)
-            });
-            let index = state
-                .sources
-                .iter()
-                .position(|s| s.path == canonical)
-                .with_context(|| format!("File is not imported: {}", source_path.display()))?;
-            state.sources.remove(index);
+        Commands::Rm { mut keys } => {
+            if keys.is_empty() {
+                let choices: Vec<_> = state
+                    .sources
+                    .iter()
+                    .flat_map(|source| &source.entries)
+                    .flat_map(|entry| (1..=entry.key.len()).map(|end| entry.key[..end].to_vec()))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                if choices.is_empty() {
+                    println!("No keys to remove.");
+                    return Ok(0);
+                }
+                let labels: Vec<_> = choices.iter().map(|key| key.join(" ")).collect();
+                keys =
+                    choices[ui::select("Choose the key or namespace to remove", &labels)?].clone();
+            }
+            state.remove(&keys)?;
             state.save(&path)?;
-            println!("Removed {}", source_path.display());
+            println!("Removed {}", keys.join(" "));
         }
         Commands::Ls => {
             if state.sources.is_empty() {

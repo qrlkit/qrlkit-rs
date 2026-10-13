@@ -273,3 +273,29 @@ args = [
     assert (root / "selected").read_text() == "minor/New feature"
 
 print("Mixed enum and free-text arguments: full and partial prompting passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-rm-test-") as directory:
+    root = Path(directory)
+    source = root / "keys.toml"
+    source.write_text('[x.y]\nz = "./z"\n[x]\nkeep = "./keep"\n')
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+        env=env, capture_output=True, check=True,
+    )
+    before = (root / "state.yaml").read_bytes()
+    run_interactive(root, [("Choose the key or namespace to remove", b"\x1b")],
+                    success=False, command=("rm",))
+    assert (root / "state.yaml").read_bytes() == before
+    # Sorted options are x, x keep, x y, x y z; choose the namespace x y.
+    transcript = run_interactive(root, [("x y z", b"\x1b[B\x1b[B\r")], command=("rm",))
+    assert b"Removed x y" in transcript
+    result = subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "reload"],
+        env=env, capture_output=True, check=True,
+    )
+    state = (root / "state.yaml").read_text()
+    assert "./keep" in state and "./z" not in state
+    assert source.read_text() == '[x.y]\nz = "./z"\n[x]\nkeep = "./keep"\n'
+
+print("Key removal: namespace selection, cancellation, and reload persistence passed")

@@ -125,7 +125,7 @@ Current version is 0.5.5 but any minor version can ship with a breaking change u
     - [x] graceful collisions
 - [x] qrlkit [keys…]
 - [x] ls
-- [x] rm <path>
+- [x] rm [keys…]
 - [x] reload
 - [x] set-browser
 - [x] set-filehook <command>
@@ -167,7 +167,7 @@ Current version is 0.5.5 but any minor version can ship with a breaking change u
 | `qrlkit --config <path> …` | Use a separate state file for debugging |
 | `qrlkit add <file-or-directory>` | Register configs and set up root commands |
 | `qrlkit ls` | List registered config files |
-| `qrlkit rm <path>` | Unregister a config; keep the file |
+| `qrlkit rm [keys…]` | Remove a key and everything under it; omit keys to choose |
 | `qrlkit reload` | Refresh imports and retry shell setup |
 | `qrlkit set-collision-strategy <strategy>` | Choose `merge` (default) to combine shared namespaces or `rename` to rename conflicting roots |
 | `qrlkit set-browser` | Choose the default browser |

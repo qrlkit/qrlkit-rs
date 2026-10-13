@@ -44,6 +44,9 @@ pub struct Source {
     /// Original path -> effective path, separated by spaces. Retained across reloads.
     #[serde(default)]
     pub renames: BTreeMap<String, String>,
+    /// Removed prefixes in original source keys, retained across reloads and renames.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_keys: Vec<Vec<String>>,
     pub entries: Vec<Entry>,
 }
 
@@ -113,6 +116,13 @@ impl State {
         crate::alias::validate(&self.sources)?;
         let mut keys = std::collections::BTreeSet::new();
         for source in &self.sources {
+            for key in &source.removed_keys {
+                ensure!(
+                    !key.is_empty() && key.iter().all(|k| crate::import::valid_segment(k)),
+                    "Invalid removed key in {}",
+                    source.path.display()
+                );
+            }
             for entry in &source.entries {
                 ensure!(
                     !entry.key.is_empty()
@@ -175,6 +185,42 @@ impl State {
         temp.as_file().sync_all()?;
         temp.persist(path)
             .with_context(|| format!("Cannot save {}", path.display()))?;
+        Ok(())
+    }
+
+    pub fn remove(&mut self, key: &[String]) -> Result<()> {
+        ensure!(
+            !key.is_empty()
+                && self.sources.iter().any(|source| source
+                    .entries
+                    .iter()
+                    .any(|entry| entry.key.starts_with(key))),
+            "No resource or namespace for: qrlkit {}",
+            key.join(" ")
+        );
+        for source in &mut self.sources {
+            if !source
+                .entries
+                .iter()
+                .any(|entry| entry.key.starts_with(key))
+            {
+                continue;
+            }
+            let original = crate::import::map_key(key, &source.renames, true);
+            source
+                .removed_keys
+                .retain(|prefix| !prefix.starts_with(&original));
+            if !source
+                .removed_keys
+                .iter()
+                .any(|prefix| original.starts_with(prefix))
+            {
+                source.removed_keys.push(original);
+            }
+            source.entries.retain(|entry| !entry.key.starts_with(key));
+        }
+        // Fully removed imports can be added again and need not exist on disk.
+        self.sources.retain(|source| !source.entries.is_empty());
         Ok(())
     }
 
@@ -258,6 +304,7 @@ mod tests {
             alias: None,
             path: "test.toml".into(),
             renames: BTreeMap::new(),
+            removed_keys: vec![],
             entries: [
                 vec!["gh", "prs", "b"],
                 vec!["gh", "prs", "a"],
@@ -297,6 +344,7 @@ mod tests {
             alias: None,
             path: "team.toml".into(),
             renames: BTreeMap::new(),
+            removed_keys: vec![],
             entries: vec![Entry {
                 hint: None,
                 browser: None,
