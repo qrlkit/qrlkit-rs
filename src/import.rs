@@ -457,7 +457,7 @@ web.repo = "not a resource"
         rename(&mut source, "web", "links").unwrap();
         fs::write(
             &source.path,
-            "[web]\n# hint: Updated\nrepo = 'https://example.com'",
+            "[web]\nrepo = 'https://example.com' # hint: Updated",
         )
         .unwrap();
         let loaded = reload(&[source]).unwrap();
@@ -465,6 +465,59 @@ web.repo = "not a resource"
         assert_eq!(loaded[0].entries[0].hint.as_deref(), Some("Updated"));
         fs::write(&loaded[0].path, "[web]\nrepo = 'https://example.com'").unwrap();
         assert!(reload(&loaded).unwrap()[0].entries[0].hint.is_none());
+    }
+
+    #[test]
+    fn toml_inline_hints_use_value_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = r####"[web]
+'x' = "https://example.com"  # hint: Opens ø page
+# hint: Above
+both = 'https://example.com' # hint: Inline wins
+fragment = 'https://example.com/# hint: inside string'
+ordinary = 'https://example.com' # ordinary comment # hint: Not metadata
+empty = 'https://example.com' # hint:
+# hint: Above empty
+fallback = 'https://example.com' # hint:
+nested.page = 'https://example.com' # hint: Nested page
+'api.v2' = 'https://example.com' # hint: Literal dotted key
+object = { run = 'echo hello' } # hint: Object hint
+container = { page = 'https://example.com' } # hint: Not the child hint
+explicit = { url = 'https://example.com', hint = 'Explicit hint' } # hint: Comment hint
+multiline = """https://example.com""" # hint: Multiline value
+after = 'https://example.com'
+# hint: Task above
+[task]
+run = '''
+echo '# hint: Inside script'
+''' # hint: Only the run field
+"####;
+        for text in [text.to_owned(), text.replace('\n', "\r\n")] {
+            let source = fixture(dir.path(), "inline.toml", &text);
+            for (key, expected) in [
+                ("web x", Some("Opens ø page")),
+                ("web both", Some("Inline wins")),
+                ("web fragment", None),
+                ("web ordinary", None),
+                ("web empty", None),
+                ("web fallback", Some("Above empty")),
+                ("web nested page", Some("Nested page")),
+                ("web api.v2", Some("Literal dotted key")),
+                ("web object", Some("Object hint")),
+                ("web container page", None),
+                ("web explicit", Some("Explicit hint")),
+                ("web multiline", Some("Multiline value")),
+                ("web after", None),
+                ("task", Some("Task above")),
+            ] {
+                let entry = source
+                    .entries
+                    .iter()
+                    .find(|e| e.key.join(" ") == key)
+                    .unwrap_or_else(|| panic!("Missing {key}"));
+                assert_eq!(entry.hint.as_deref(), expected, "{key}");
+            }
+        }
     }
 
     #[test]

@@ -61,6 +61,38 @@ fn path_output(output: Output, path: &Path) {
     );
 }
 
+#[test]
+fn inline_hints_persist_refresh_and_disappear_on_reload() {
+    for extension in ["toml", "yaml", "yml"] {
+        let f = Fixture::new(extension);
+        let target = f.dir.path().join("repo.txt");
+        fs::write(&target, "repo").unwrap();
+        let (original, bare) = if extension == "toml" {
+            (
+                "[files]\n# hint: Above\nrepo = './repo.txt' # hint: Inline\n",
+                "[files]\nrepo = './repo.txt'",
+            )
+        } else {
+            (
+                "files:\n  # hint: Above\n  repo: './repo.txt' # hint: Inline\n",
+                "files:\n  repo: './repo.txt'",
+            )
+        };
+        fs::write(&f.source, original).unwrap();
+        f.add();
+        assert_eq!(f.state()["sources"][0]["entries"][0]["hint"], "Inline");
+
+        fs::write(&f.source, format!("{bare} # hint: Updated\n")).unwrap();
+        path_output(f.run(&["files", "repo"]), &target);
+        assert_eq!(f.state()["sources"][0]["entries"][0]["hint"], "Updated");
+
+        fs::write(&f.source, bare).unwrap();
+        success(f.run(&["reload"]));
+        assert!(f.state()["sources"][0]["entries"][0]["hint"].is_null());
+        path_output(f.run(&["files", "repo"]), &target);
+    }
+}
+
 fn lifecycle(ext: &'static str) {
     let f = Fixture::new(ext);
     fs::write(f.dir.path().join("first"), "").unwrap();

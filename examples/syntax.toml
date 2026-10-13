@@ -11,9 +11,9 @@ release_types = ["major", "minor", "patch"]
 docs = "https://docs.rs/ratatui/latest/ratatui/"
 
 # Relative to your shell: change directory or print a file path
+# Hints can also go after the value.
 [paths]
-# hint: Opens repo
-repo = "./"
+repo = "./" # hint: Opens repo
 # Absolute path
 project = "{constants.root}/project"
 readme = "./README.md"

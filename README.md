@@ -21,7 +21,7 @@ rs = "https://github.com/qrlkit/qrlkit-rs"
 web = "https://github.com/qrlkit/qrlkit-web"
 
 [repos.prs]
-rs = "https://github.com/qrlkit/qrlkit-rs"
+rs = "https://github.com/qrlkit/qrlkit-rs/pulls"
 web = "https://github.com/qrlkit/qrlkit-web/pulls"
 
 [qk.check]
@@ -77,23 +77,37 @@ and 2) have as little friction as possible:
 
 ## Install
 
-*Step 1* Clone repo and install qrlkit binary 
+### From package manager  
+
+A few package managers can be used to install the binary for your platform:
+
+```
+cargo install qrlkit
+
+npm i -g qrlkit
+
+bun add -g qrlkit
+
+yarn global add qrlkit
+
+```
+
+### From Github release:
+
+Install the latest release for Linux or macOS into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/qrlkit/qrlkit-rs/main/install.sh | sh
+```
+
+### From Source  
+
+Clone repo and install qrlkit binary with cargo  
 
 ```
 git clone git@github.com:qrlkit/qrlkit-rs.git
 cd qrlkit-rs
 cargo install --path .
-
-# Then start init to set the defaults you want (shell, browser etc)
-qrlkit init 
-```
-
-*Step 2* Write some config you want 
-
-*Step 3* Add the config
-
-```
-qrlkit add shortcuts.toml
 ```
 
 ## Version 1 Roadmap
@@ -261,8 +275,7 @@ Comments with `hint: ` in them will be included in the terminal.
 # hint: Find your next mission
 issues = "https://github.com/ratatui/ratatui/issues"
 
-# hint: Browse the source code
-repo = "https://github.com/ratatui/ratatui"
+repo = "https://github.com/ratatui/ratatui" # hint: Browse the source code
 ```
 
 Run `qrlkit launch` after importing the config:
