@@ -1,3 +1,6 @@
+### 0.9.3
+- Fix qrlkit rm to delete by keys instead of paths
+
 ### 0.9.2
 - Update hint syntax to support optional hints after values
 
