@@ -28,6 +28,8 @@ pub struct Entry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<crate::script::Script>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<crate::script::Argument>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filehook: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dirhook: Option<String>,
@@ -139,12 +141,13 @@ impl State {
                 }
                 if let Some(script) = &entry.script {
                     ensure!(
-                        entry.url.is_empty(),
+                        entry.url.is_empty() && entry.args.is_none(),
                         "Resource cannot be both a script and a URL/path"
                     );
                     script.validate()?;
                 } else {
                     crate::resource::validate(&entry.url)?;
+                    crate::template::validate_arguments(&entry.url, entry.args.as_deref())?;
                 }
                 ensure!(
                     keys.insert(entry.key.clone()),
@@ -318,6 +321,7 @@ mod tests {
                 key: key.into_iter().map(String::from).collect(),
                 url: "https://example.com".into(),
                 script: None,
+                args: None,
                 filehook: None,
                 dirhook: None,
             })
@@ -351,6 +355,7 @@ mod tests {
                 key: vec!["git".into(), "prs".into()],
                 url: "https://example.com".into(),
                 script: None,
+                args: None,
                 filehook: None,
                 dirhook: None,
             }],

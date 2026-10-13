@@ -120,7 +120,16 @@ fn resolve_resources(
 ) -> Result<()> {
     match node {
         Node::String(value) => *value = expand(value, local, global)?,
-        Node::Table(table) if table.contains_key("run") => {
+        Node::Table(table)
+            if table.contains_key("run")
+                || (table.contains_key("url")
+                    && (table.contains_key("args") || table.contains_key("hint"))) =>
+        {
+            if !table.contains_key("run")
+                && let Some(Node::String(url)) = table.get_mut("url")
+            {
+                *url = expand(url, local, global)?;
+            }
             if let Some(Node::Array(args)) = table.get_mut("args") {
                 for arg in args {
                     if let Node::Table(arg) = arg
@@ -162,18 +171,16 @@ fn resolve_resources(
             }
         }
         Node::Table(table) => {
-            let resource_object = table.contains_key("url") && table.contains_key("hint");
             for (name, value) in table {
                 if matches!(name.as_str(), "browser" | "filehook" | "dirhook")
                     || (root && name == "alias")
-                    || (resource_object && name == "hint")
                 {
                     continue;
                 }
                 resolve_resources(value, local, global, false)?;
             }
         }
-        Node::Array(_) => bail!("Arrays are only supported in constants and script args"),
+        Node::Array(_) => bail!("Arrays are only supported in constants and args"),
     }
     Ok(())
 }

@@ -140,7 +140,7 @@ fn flatten(
     browser: Option<&str>,
 ) -> Result<()> {
     match value {
-        Node::Array(_) => anyhow::bail!("Arrays are only supported in constants and script args"),
+        Node::Array(_) => anyhow::bail!("Arrays are only supported in constants and args"),
         Node::Table(table) => {
             let browser = match table.get("browser") {
                 Some(value) => Some(value.as_str().context("browser must be a string")?),
@@ -162,17 +162,22 @@ fn flatten(
                 }
                 None => dirhook,
             };
-            if table.contains_key("url") && table.contains_key("hint") {
+            if table.contains_key("url")
+                && (table.contains_key("hint") || table.contains_key("args"))
+            {
                 ensure!(!key.is_empty(), "Resource objects must have a name");
                 ensure!(
                     table.keys().all(|k| matches!(
                         k.as_str(),
-                        "url" | "hint" | "browser" | "filehook" | "dirhook"
+                        "url" | "hint" | "args" | "browser" | "filehook" | "dirhook"
                     )),
                     "Resource {} cannot contain child resources or unknown settings",
                     key.join(" ")
                 );
-                let hint = table["hint"].as_str().context("hint must be a string")?;
+                let hint = table
+                    .get("hint")
+                    .map(|v| v.as_str().context("hint must be a string"))
+                    .transpose()?;
                 let url = table["url"].as_str().context("url must be a string")?;
                 flatten(
                     &Node::String(url.to_owned()),
@@ -183,8 +188,13 @@ fn flatten(
                     dirhook,
                     browser,
                 )?;
-                entries.last_mut().unwrap().hint =
-                    Some(hint.trim().to_owned()).filter(|s| !s.is_empty());
+                let entry = entries.last_mut().unwrap();
+                entry.hint = hint
+                    .map(str::trim)
+                    .map(str::to_owned)
+                    .filter(|s| !s.is_empty());
+                entry.args = crate::script::arguments(table.get("args"))?;
+                crate::template::validate_arguments(url, entry.args.as_deref())?;
                 return Ok(());
             }
             if let Some(run) = table.get("run") {
@@ -221,6 +231,7 @@ fn flatten(
                     key: key.clone(),
                     url: String::new(),
                     script: Some(script),
+                    args: None,
                     browser: None,
                     filehook: None,
                     dirhook: None,
@@ -250,6 +261,7 @@ fn flatten(
                 key: key.clone(),
                 url: url.clone(),
                 script: None,
+                args: None,
                 browser: browser.map(str::to_owned),
                 filehook: filehook.map(str::to_owned),
                 dirhook: dirhook.map(str::to_owned),

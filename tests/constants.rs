@@ -300,3 +300,126 @@ fn shipped_examples_execute_mixed_arguments_and_environment_across_formats() {
         assert!(String::from_utf8_lossy(&output.stdout).starts_with("Hello, friend!\n"));
     }
 }
+
+#[test]
+fn resource_arguments_work_across_formats_and_reload_constants() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("first repo")).unwrap();
+        fs::write(root.join("first repo/README.md"), "hello").unwrap();
+        fs::write(
+            root.join("constants.toml"),
+            "[constants]\nrepos=['first repo']\n",
+        )
+        .unwrap();
+        let config = serde_json::json!({
+            "constants": {"root": ".", "files": ["README.md"]},
+            "files": {"filehook": "printf '%s' $file", "read": {
+                "url": "{constants.root}/{repo}/{file}", "hint": "Read a file",
+                "args": [
+                    {"name": "file", "enum": {"ref": "constants.files"}},
+                    {"name": "repo", "enum": {"ref": "global.repos"}}
+                ]
+            }},
+            "dirs": {"dirhook": "cd $dir && printf '%s' directory", "open": {
+                "url": "./{repo}", "args": [{"name": "repo", "enum": ["first repo"]}]
+            }},
+            "links": {"open": {
+                "url": "https://example.com/{repo}",
+                "args": [{"name": "repo", "enum": {"ref": "global.repos"}}]
+            }}
+        });
+        let text = match extension {
+            "toml" => toml::to_string(&config).unwrap(),
+            "yaml" => serde_yaml_ng::to_string(&config).unwrap(),
+            _ => config.to_string(),
+        };
+        let source = format!("resources.{extension}");
+        fs::write(root.join(&source), text).unwrap();
+        success(root, &["add", &source]);
+        let output = success(root, &["files", "read", "README.md", "first repo"]);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            root.join("first repo/README.md")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_qrlkit"))
+            .current_dir(root)
+            .env("HOME", root)
+            .env("QRL_CD_FILE", root.join("directory-channel"))
+            .args([
+                "--config",
+                root.join("state.yaml").to_str().unwrap(),
+                "dirs",
+                "open",
+                "first repo",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"directory");
+        assert_eq!(
+            fs::read_to_string(root.join("directory-channel"))
+                .unwrap()
+                .trim(),
+            root.join("first repo")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        for args in [
+            vec!["files", "read", "unknown"],
+            vec!["dirs", "open", "unknown"],
+            vec!["links", "open", "unknown"],
+            vec!["files", "read", "README.md", "first repo", "extra"],
+        ] {
+            let output = run(root, &args);
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("interactive terminal"));
+        }
+        fs::write(
+            root.join("constants.toml"),
+            "[constants]\nrepos=['second']\n",
+        )
+        .unwrap();
+        let output = run(root, &["files", "read", "README.md", "first repo"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("expected one of: second"));
+    }
+}
+
+#[test]
+fn invalid_resource_arguments_leave_state_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("resources.toml"), "[files]\nfile='./{name}'\n").unwrap();
+    success(root, &["add", "resources.toml"]);
+    let before = fs::read(root.join("state.yaml")).unwrap();
+    for args in [
+        "[]",
+        "[{name='other'}]",
+        "[{name='name'}, {name='name'}]",
+        "[{name='name',enum=[]}]",
+        "[{name='name',enum=['a','a']}]",
+        "[{name='name',enum={ref='constants.missing'}}]",
+        "[{name='name',enum='a'}]",
+    ] {
+        fs::write(
+            root.join("resources.toml"),
+            format!("[files.file]\nurl='./{{name}}'\nargs={args}\n"),
+        )
+        .unwrap();
+        assert!(!run(root, &["reload"]).status.success(), "{args}");
+        assert_eq!(fs::read(root.join("state.yaml")).unwrap(), before);
+    }
+}

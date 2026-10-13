@@ -19,13 +19,15 @@ import time
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/qrlkit").resolve()
 
 
-def run_interactive(root, answers, success=True, command=("init",)):
+def run_interactive(root, answers, success=True, command=("init",), directory_channel=False):
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.update(
             HOME=str(root), ZDOTDIR=str(root), XDG_CONFIG_HOME=str(root),
             SHELL="/bin/zsh", TERM="xterm-256color",
         )
+        if directory_channel:
+            os.environ["QRL_CD_FILE"] = str(root / "directory-channel")
         os.execv(str(BINARY), [str(BINARY), "--config", str(root / "state.yaml"), *command])
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 180, 0, 0))
     transcript = b""
@@ -299,3 +301,60 @@ with tempfile.TemporaryDirectory(prefix="qrl-rm-test-") as directory:
     assert source.read_text() == '[x.y]\nz = "./z"\n[x]\nkeep = "./keep"\n'
 
 print("Key removal: namespace selection, cancellation, and reload persistence passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-resource-enum-test-") as directory:
+    root = Path(directory)
+    (root / "second").mkdir()
+    (root / "second" / "note.txt").write_text("hello")
+    source = root / "resources.toml"
+    source.write_text('''
+[files.read]
+url = './{repo}/{file}'
+filehook = 'printf "%s" $file > selected'
+args = [
+    { name = "repo", enum = ["first", "second"] },
+    { name = "file" },
+]
+[dirs.open]
+url = './{repo}'
+dirhook = 'cd $dir && pwd > ../selected'
+args = [{ name = "repo", enum = ["first", "second"] }]
+'''.replace('> selected', f'> "{root / "selected"}"'))
+    browser = root / "browser"
+    browser.write_text(f'#!/bin/sh\nprintf "%s" "$1" > "{root / "opened"}"\n')
+    browser.chmod(0o755)
+    source.write_text(source.read_text().replace("./{repo}", str(root) + "/{repo}") + f'''
+[links.open]
+url = "https://example.com/{{repo}}"
+browser = {json.dumps(str(browser))}
+args = [{{ name = "repo", enum = ["first", "second repo"] }}]
+''')
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+        env=env, capture_output=True, check=True,
+    )
+    run_interactive(root, [("repo:", b"\x1b[B\r"), ("file:", b"note.txt\r")],
+                    command=("files", "read"))
+    assert (root / "selected").read_text() == str((root / "second/note.txt").resolve())
+    run_interactive(root, [("file:", b"note.txt\r")], command=("files", "read", "second"))
+    run_interactive(root, [("repo:", b"\x1b[B\r")], command=("dirs", "open"), directory_channel=True)
+    assert (root / "selected").read_text().strip() == str((root / "second").resolve())
+    (root / "selected").unlink()
+    run_interactive(root, [("repo:", b"\x1b")], success=False, command=("files", "read"))
+    assert not (root / "selected").exists()
+    transcript = run_interactive(root, [("repo:", b"\x1b[B\r")], command=("links", "open"))
+    assert b"qrlkit: open https://example.com/second%20repo" in transcript
+    # A detached browser may receive SIGHUP when the PTY session ends.
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "links", "open", "second repo"],
+        env=env, capture_output=True, check=True,
+    )
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if (root / "opened").exists() and (root / "opened").read_text() == "https://example.com/second%20repo":
+            break
+        time.sleep(0.01)
+    assert (root / "opened").read_text() == "https://example.com/second%20repo"
+
+print("Resource enums: selection, text input, partial arguments, and cancellation passed")

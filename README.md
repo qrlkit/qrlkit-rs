@@ -188,6 +188,9 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 
 Each example replaces the previous one.
 
+Resource arguments match every placeholder name.
+CLI values follow argument declaration order.
+
 ### URLs
 
 Open URLs in your default browser.
@@ -226,8 +229,25 @@ browser = "firefox"
 open = "https://github.com/{constants.org}/{repo}"
 ```
 
+Offer repository choices from a constant.
+
+```toml
+[constants]
+org = "qrlkit"
+repos = ["qrlkit-rs", "qrlkit-web"]
+
+[repos.open]
+url = "https://github.com/{constants.org}/{repo}"
+hint = "Browse the source code"
+browser = "firefox"
+args = [
+  { name = "repo", enum = { ref = "constants.repos" } },
+]
+```
+
 ```sh
-qrlkit repos open qrlkit-rs
+qrlkit repos open qrlkit-rs  # Open directly
+qrlkit repos open            # Choose interactively
 ```
 
 Supported browsers:
@@ -272,8 +292,24 @@ filehook = "nvim $file"
 readme = "{constants.root}/{repo}/README.md" # hint: Edit the project README
 ```
 
+Offer project choices before opening files.
+
+```toml
+[constants]
+root = "~/dev"
+
+[files.readme]
+url = "{constants.root}/{repo}/README.md"
+hint = "Edit the project README"
+filehook = "nvim $file"
+args = [
+  { name = "repo", enum = ["qrlkit-rs", "qrlkit-web"] },
+]
+```
+
 ```sh
-qrlkit files readme qrlkit-rs
+qrlkit files readme qrlkit-rs  # Open directly
+qrlkit files readme            # Choose interactively
 ```
 
 Set global defaults with `qrlkit set-filehook`.
@@ -311,13 +347,29 @@ Add hints and list directory contents.
 root = "~/dev"
 
 [dirs]
-dirhook = "cd $dir && ls"
+dirhook = "cd $dir && tree -L 1"
 # hint: Enter and inspect the project
 project = "{constants.root}/{repo}"
 ```
 
+Offer project choices before changing directories.
+
+```toml
+[constants]
+root = "~/dev"
+
+[dirs.project]
+url = "{constants.root}/{repo}"
+hint = "Enter and inspect the project"
+dirhook = "cd $dir && tree -L 1"
+args = [
+  { name = "repo", enum = ["qrlkit-rs", "qrlkit-web"] },
+]
+```
+
 ```sh
-qrlkit dirs project qrlkit-rs
+qrlkit dirs project qrlkit-rs  # Open directly
+qrlkit dirs project            # Choose interactively
 ```
 
 Set global defaults with `qrlkit set-dirhook`.
@@ -396,8 +448,6 @@ qrlkit greet Hey
 ```
 
 Supported shells: `bash`, `sh`, and `zsh`.
-
-Constants expand in `env`, never `run`.
 
 ### Shared constants
 
