@@ -45,7 +45,7 @@ fn import_reload_remove_and_failure_atomicity() {
     fs::remove_file(&source).unwrap();
     assert!(!run(&config, &["reload"]).status.success());
     assert_eq!(before, fs::read(&config).unwrap());
-    assert!(run(&config, &["rm", path]).status.success());
+    assert!(run(&config, &["rm", "git"]).status.success());
     assert!(String::from_utf8_lossy(&run(&config, &["ls"]).stdout).contains("No imports"));
 }
 
@@ -601,11 +601,7 @@ fn automatic_reload_updates_paths_and_preserves_aliases_atomically() {
     }
     fs::remove_file(&source).unwrap();
     assert!(!run(&config, &["team", "new"]).status.success());
-    assert!(
-        run(&config, &["rm", source.to_str().unwrap()])
-            .status
-            .success()
-    );
+    assert!(run(&config, &["rm", "team"]).status.success());
 }
 
 #[cfg(unix)]
@@ -1035,7 +1031,7 @@ fn merge_is_default_and_strategy_changes_are_atomic() {
         assert!(!run(&config, &args).status.success());
         assert_eq!(fs::read(&config).unwrap(), before);
     }
-    assert!(run(&config, &["rm", b.to_str().unwrap()]).status.success());
+    assert!(run(&config, &["rm", "qk", "git", "b"]).status.success());
     assert!(
         run(&config, &["set-collision-strategy", "rename"])
             .status
@@ -1256,4 +1252,54 @@ fn add_directory_override_applies_only_to_new_files_and_rename_failure_is_atomic
         .success()
     );
     assert_eq!(fs::read(&config).unwrap(), before);
+}
+
+#[test]
+fn remove_namespace_spans_sources_and_preserves_renamed_exclusions() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let a = dir.path().join("a.toml");
+    let b = dir.path().join("b.json");
+    fs::write(&a, "[x.y]\nz = './z'\n[x]\nkeep = './keep'").unwrap();
+    fs::write(&b, r#"{"x":{"y":{"other":"./other"}},"xy":"./xy"}"#).unwrap();
+    for source in [&a, &b] {
+        assert!(
+            run(&config, &["add", source.to_str().unwrap()])
+                .status
+                .success()
+        );
+    }
+    let mut state: serde_json::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    for source in state["sources"].as_array_mut().unwrap() {
+        source["renames"]["x"] = "team".into();
+        for entry in source["entries"].as_array_mut().unwrap() {
+            if entry["key"][0] == "x" {
+                entry["key"][0] = "team".into();
+            }
+        }
+    }
+    fs::write(&config, serde_yaml_ng::to_string(&state).unwrap()).unwrap();
+    assert!(run(&config, &["rm", "team", "y"]).status.success());
+    assert!(run(&config, &["reload"]).status.success());
+    let state: serde_json::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    for source in state["sources"].as_array().unwrap() {
+        assert_eq!(source["removed_keys"], serde_json::json!([["x", "y"]]));
+        assert_eq!(source["entries"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(
+        state["sources"][0]["entries"][0]["key"],
+        serde_json::json!(["team", "keep"])
+    );
+    assert_eq!(
+        state["sources"][1]["entries"][0]["key"],
+        serde_json::json!(["xy"])
+    );
+    // Removal still works against cached keys when a source is invalid or missing.
+    fs::write(&a, "broken = [").unwrap();
+    fs::remove_file(&b).unwrap();
+    assert!(run(&config, &["rm", "team"]).status.success());
+    assert!(run(&config, &["rm", "xy"]).status.success());
+    assert!(run(&config, &["ls"]).status.success());
 }

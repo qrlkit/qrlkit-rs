@@ -93,6 +93,55 @@ fn inline_hints_persist_refresh_and_disappear_on_reload() {
     }
 }
 
+fn remove_keys_and_namespaces(ext: &'static str) {
+    let f = Fixture::new(ext);
+    f.write(json!({"x":{"y":{"z":"./z", "sibling":"./sibling"}, "keep":"./keep"}, "xy":"./xy"}));
+    f.add();
+    let original = fs::read(&f.source).unwrap();
+    let keys = || {
+        f.state()["sources"][0]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["key"].clone())
+            .collect::<Vec<_>>()
+    };
+    success(f.run(&["rm", "x", "y", "z"]));
+    success(f.run(&["reload"]));
+    assert_eq!(
+        keys(),
+        vec![
+            json!(["x", "keep"]),
+            json!(["x", "y", "sibling"]),
+            json!(["xy"])
+        ]
+    );
+    assert!(!f.run(&["x", "y", "z"]).status.success());
+    let before = fs::read(&f.config).unwrap();
+    assert!(!f.run(&["rm", "x", "missing"]).status.success());
+    assert_eq!(fs::read(&f.config).unwrap(), before);
+    success(f.run(&["rm", "x", "y"]));
+    // Newly added descendants also stay excluded from a removed namespace.
+    f.write(json!({"x":{"y":{"z":"./z", "new":"./new"}, "keep":"./keep"}, "xy":"./xy"}));
+    success(f.run(&["ls"]));
+    assert_eq!(keys(), vec![json!(["x", "keep"]), json!(["xy"])]);
+    success(f.run(&["rm", "x"]));
+    success(f.run(&["reload"]));
+    assert_eq!(keys(), vec![json!(["xy"])]);
+    assert!(
+        !String::from_utf8(success(f.run(&["__aliases", "bash"])).stdout)
+            .unwrap()
+            .contains("--root 'x'")
+    );
+    let source_before = fs::read(&f.source).unwrap();
+    success(f.run(&["rm", "xy"]));
+    assert!(f.state()["sources"].as_array().unwrap().is_empty());
+    assert_eq!(fs::read(&f.source).unwrap(), source_before);
+    fs::write(&f.source, original).unwrap();
+    f.add();
+    assert!(keys().contains(&json!(["x", "y", "z"])));
+}
+
 fn lifecycle(ext: &'static str) {
     let f = Fixture::new(ext);
     fs::write(f.dir.path().join("first"), "").unwrap();
@@ -125,7 +174,7 @@ fn lifecycle(ext: &'static str) {
     assert_eq!(before, fs::read(&f.config).unwrap());
     fs::remove_file(&f.source).unwrap();
     assert!(!f.run(&["reload"]).status.success());
-    success(f.run(&["rm", f.source.to_str().unwrap()]));
+    success(f.run(&["rm", "files"]));
     assert!(f.state()["sources"].as_array().unwrap().is_empty());
 }
 
@@ -290,6 +339,10 @@ macro_rules! format_suite {
                 super::lifecycle($ext);
             }
             #[test]
+            fn remove_keys_and_namespaces() {
+                super::remove_keys_and_namespaces($ext);
+            }
+            #[test]
             fn invalid_resources_preserve_state() {
                 super::invalid_resources($ext);
             }
@@ -418,7 +471,7 @@ fn alias_metadata(ext: &'static str) {
     let functions = String::from_utf8(success(f.run(&["__aliases", "bash"])).stdout).unwrap();
     assert!(functions.contains("qrl-test-renamed"));
     assert!(!functions.contains("qrl-test-tools"));
-    success(f.run(&["rm", f.source.to_str().unwrap()]));
+    success(f.run(&["rm", "web"]));
     assert!(success(f.run(&["__aliases", "bash"])).stdout.is_empty());
 }
 #[test]
@@ -625,7 +678,7 @@ fn automatic_root_commands_across_formats_and_lifecycle() {
         assert!(functions.contains("--root 'journal'"));
         assert!(!functions.contains("--root 'docs'"));
         assert!(!functions.contains("--root 'notes'"));
-        success(f.run(&["rm", f.source.to_str().unwrap()]));
+        success(f.run(&["rm", "journal"]));
         assert!(success(f.run(&["__aliases", "bash"])).stdout.is_empty());
         f.add();
         success(f.run(&["nuke"]));

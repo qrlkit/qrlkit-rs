@@ -246,7 +246,7 @@ fn broken_globals_fail_reload_atomically_and_do_not_prevent_removal() {
         assert_eq!(before, fs::read(root.join("state.yaml")).unwrap());
         assert!(!root.join("ran").exists());
     }
-    success(root, &["rm", "task.toml"]);
+    success(root, &["rm", "task"]);
 }
 
 #[test]

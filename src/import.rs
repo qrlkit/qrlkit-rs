@@ -125,6 +125,7 @@ pub fn read_with_constants(
         alias,
         path,
         renames,
+        removed_keys: vec![],
         entries,
     })
 }
@@ -381,6 +382,8 @@ pub fn reload_with_constants(
     sources.iter().map(|s| {
         // Validate and transform the same snapshot; do not reread a changing file.
         let mut loaded = read_with_constants(&s.path, BTreeMap::new(), global)?;
+        loaded.entries.retain(|entry| !s.removed_keys.iter().any(|prefix| entry.key.starts_with(prefix)));
+        loaded.removed_keys = s.removed_keys.clone();
         let mut effective = BTreeMap::new();
         for entry in &mut loaded.entries {
             for end in 1..=entry.key.len() {
