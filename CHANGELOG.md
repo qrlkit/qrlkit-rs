@@ -1,3 +1,6 @@
+### 0.9.2
+- Update hint syntax to support optional hints after values
+
 ### 0.9.1
 - yaml and json constants+args
 
