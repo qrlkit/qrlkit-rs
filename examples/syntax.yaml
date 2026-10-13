@@ -11,8 +11,8 @@ web:
   docs: https://docs.rs/ratatui/latest/ratatui/
 # Relative to your shell: change directory or print a file path
 paths:
-  # hint: Opens repo
-  repo: ./
+  # Hints can also go after the value.
+  repo: ./ # hint: Opens repo
   # Absolute path
   project: "{constants.root}/project"
   readme: ./README.md

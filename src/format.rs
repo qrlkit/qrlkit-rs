@@ -110,7 +110,7 @@ pub fn parse(path: &Path, text: &str) -> Result<Node> {
 /// Read comment metadata using parser-provided key spans, so text inside
 /// multiline strings cannot be mistaken for resource declarations.
 pub fn toml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
-    struct Keys(Vec<(toml::Spanned<String>, Keys)>);
+    struct Keys(Vec<(toml::Spanned<String>, toml::Spanned<Keys>)>);
     impl<'de> Deserialize<'de> for Keys {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
             struct KeyVisitor;
@@ -146,19 +146,30 @@ pub fn toml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
         for (key, children) in tree.0 {
             let before = &text[..key.span().start];
             let (previous, prefix) = before.rsplit_once('\n').unwrap_or(("", before));
+            // Only assignments have a value after the key. Table spans can
+            // encompass their children, whose trailing comments belong to them.
+            let inline_hint = text
+                .get(key.span().end..children.span().start)
+                .filter(|between| between.contains('=') && !between.contains('\n'))
+                .and_then(|_| text[children.span().end..].split('\n').next())
+                .and_then(|line| line.trim().strip_prefix("# hint:"))
+                .map(str::trim)
+                .filter(|hint| !hint.is_empty());
             path.push(key.into_inner());
             // Inline table members share their parent's line, not its hint.
             if !prefix.contains('=')
-                && let Some(hint) = previous
-                    .rsplit('\n')
-                    .next()
-                    .and_then(|line| line.trim().strip_prefix("# hint:"))
-                    .map(str::trim)
-                    .filter(|hint| !hint.is_empty())
+                && let Some(hint) = inline_hint.or_else(|| {
+                    previous
+                        .rsplit('\n')
+                        .next()
+                        .and_then(|line| line.trim().strip_prefix("# hint:"))
+                        .map(str::trim)
+                        .filter(|hint| !hint.is_empty())
+                })
             {
                 hints.insert(path.clone(), hint.to_owned());
             }
-            collect(children, text, path, hints);
+            collect(children.into_inner(), text, path, hints);
             path.pop();
         }
     }
@@ -171,6 +182,25 @@ pub fn toml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
 /// YAML key events carry line positions and exclude comments inside scalar bodies.
 pub fn yaml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
     use yaml_rust2::parser::{Event, Parser};
+    use yaml_rust2::scanner::TScalarStyle;
+
+    // Validate the text before a possible comment as a complete scalar. This
+    // distinguishes real comments from hashes inside quoted or plain strings.
+    fn inline_hint<'a>(line: &'a str, value: &str) -> Option<&'a str> {
+        for (index, _) in line.match_indices('#') {
+            let prefix = &line[..index];
+            if prefix.ends_with([' ', '\t'])
+                && serde_yaml_ng::from_str::<String>(prefix).ok().as_deref() == Some(value)
+            {
+                return line[index..]
+                    .strip_prefix("# hint:")
+                    .map(str::trim)
+                    .filter(|hint| !hint.is_empty());
+            }
+        }
+        None
+    }
+
     let lines: Vec<_> = text.lines().collect();
     let mut parser = Parser::new_from_str(text);
     let mut keys: Vec<Option<String>> = vec![];
@@ -202,9 +232,18 @@ pub fn yaml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
                     *key = None;
                 }
             }
-            Event::Scalar(value, ..) => {
+            Event::Scalar(value, style, ..) => {
+                let path = keys.iter().filter_map(Clone::clone).collect::<Vec<_>>();
                 if let Some(key) = keys.last_mut() {
                     if key.is_some() {
+                        if !matches!(style, TScalarStyle::Literal | TScalarStyle::Folded)
+                            && let Some(line) = lines.get(marker.line() - 1)
+                            && let Some(start) =
+                                line.char_indices().nth(marker.col()).map(|(i, _)| i)
+                            && let Some(hint) = inline_hint(&line[start..], &value)
+                        {
+                            hints.insert(path, hint.to_owned());
+                        }
                         *key = None;
                     } else {
                         *key = Some(value);
@@ -244,6 +283,50 @@ pub fn yaml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn yaml_inline_hints_respect_scalar_boundaries() {
+        let text = r##"web:
+  plain: https://example.com # hint: Plain value
+  'ø:key': "https://example.com/# hint: inside" # hint: Quoted value
+  escaped: "say \"hello\" # hint: inside" # hint: Escaped quote
+  single: 'it''s # hint: inside' # hint: Single quote
+  # hint: Above
+  both: ./file # hint: Inline wins
+  # hint: Keep above
+  empty: ./file # hint:
+  fragment: https://example.com/#hint:fragment
+  ordinary: ./file # ordinary comment # hint: Not metadata
+  quoted: "./file # hint: Not metadata"
+  multiline: "first
+    # hint: Not metadata
+    last"
+  nested:
+    page: ./file # hint: Nested page
+  flow: {page: ./file} # hint: Not the child hint
+# hint: Task hint
+task:
+  run: | # hint: Not a resource hint
+    echo hello # hint: Not metadata
+"##;
+        let expected = BTreeMap::from([
+            (vec!["web".into(), "plain".into()], "Plain value".into()),
+            (vec!["web".into(), "ø:key".into()], "Quoted value".into()),
+            (vec!["web".into(), "escaped".into()], "Escaped quote".into()),
+            (vec!["web".into(), "single".into()], "Single quote".into()),
+            (vec!["web".into(), "both".into()], "Inline wins".into()),
+            (vec!["web".into(), "empty".into()], "Keep above".into()),
+            (
+                vec!["web".into(), "nested".into(), "page".into()],
+                "Nested page".into(),
+            ),
+            (vec!["task".into()], "Task hint".into()),
+        ]);
+        for text in [text.to_owned(), text.replace('\n', "\r\n")] {
+            assert_eq!(yaml_hints(&text).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn rejects_invalid_shapes_duplicates_and_trailing_documents() {
         for (ext, text) in [

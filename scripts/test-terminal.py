@@ -179,16 +179,23 @@ with tempfile.TemporaryDirectory(prefix="qrl-collision-test-") as directory:
     assert "- collision_strategy: rename\n" in state
 
 
-for extension in ("toml", "yaml", "yml", "json"):
+for extension, hint_style in (
+    ("toml", "above"), ("toml", "inline"),
+    ("yaml", "above"), ("yaml", "inline"),
+    ("yml", "above"), ("yml", "inline"),
+    ("json", "field"),
+):
     with tempfile.TemporaryDirectory(prefix="qrl-hint-test-") as directory:
         root = Path(directory)
         source = root / f"hints.{extension}"
         target = root / "repo.txt"
         target.write_text("repo")
         if extension == "toml":
-            source.write_text(f"[web]\nplain = '{target}'\n# hint: Opens repo\nrepo = '{target}'\n")
+            repo = f"# hint: Opens repo\nrepo = '{target}'\n" if hint_style == "above" else f"repo = '{target}' # hint: Opens repo\n"
+            source.write_text(f"[web]\nplain = '{target}'\n{repo}")
         elif extension in ("yaml", "yml"):
-            source.write_text(f"web:\n  plain: {target}\n  # hint: Opens repo\n  repo: {target}\n")
+            repo = f"  # hint: Opens repo\n  repo: {target}\n" if hint_style == "above" else f"  repo: {target} # hint: Opens repo\n"
+            source.write_text(f"web:\n  plain: {target}\n{repo}")
         else:
             source.write_text(json.dumps({"web": {"plain": str(target), "repo": {"url": str(target), "hint": "Opens repo"}}}))
         env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
