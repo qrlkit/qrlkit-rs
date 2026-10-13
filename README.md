@@ -186,105 +186,243 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 
 ## Config syntax
 
-**URLs**
+Each example replaces the previous one.
 
-Urls open in the default browser set in `qrlkit init` or `qrlkit set-browser`. 
-Reserved key `browser` overrides it with options:
+### URLs
 
-- `chrome` 
-- `firefox`
-- `safari`
-- `edge`
-- `brave`
-- `chromium`
-- `arc`
-- `vivaldi`
-- `opera`
-
-Executable paths are also supported. 
-Use `{}` to forward arguments to paths. 
+Open URLs in your default browser.
 
 ```toml
-[docs]
+[repos]
+open = "https://github.com/qrlkit/qrlkit-rs"
+```
+
+Choose the repository with an argument.
+
+```toml
+[repos]
+open = "https://github.com/qrlkit/{repo}"
+```
+
+Reuse an organization through a constant.
+
+```toml
+[constants]
+org = "qrlkit"
+
+[repos]
+open = "https://github.com/{constants.org}/{repo}"
+```
+
+Add hints and override the browser.
+
+```toml
+[constants]
+org = "qrlkit"
+
+[repos]
 browser = "firefox"
-fav = "https://some-docs-you-prefer-in-ff/{area}.com"
+# hint: Browse the source code
+open = "https://github.com/{constants.org}/{repo}"
 ```
 
-**files**
+```sh
+qrlkit repos open qrlkit-rs
+```
 
-Files use the default action set in `qrlkit init` or `qrlkit set-filehook`.
-If neither is used they just otherwise print the file path.
-Reserved key `filehook` overrides global behavior with a command using `$file` for the selected path.
-Use `{}` in paths to forward arguments. 
+Supported browsers:
+`chrome`, `firefox`, `safari`, `edge`, `brave`, `chromium`, `arc`, `vivaldi`, `opera`.
+
+Custom browser executable paths also work.
+
+### Files
+
+Print file paths without configured hooks.
 
 ```toml
-[dotfiles]
-filehook = "nvim $file"
-edit = "~/.confg/{tool}/{file}"
+[files]
+readme = "~/dev/qrlkit-rs/README.md"
 ```
 
-**dirs**
-
-Dirs use the default action set in `qrlkit init` or `qrlkit set-dirhook`.
-If neither is used they otherwise just `cd` into directory via shell integration.
-Reserved key `dirhook` overrides global behavior with a command using `$dir` for the selected path.
+Choose the project with an argument.
 
 ```toml
-[dirs]
-dirhook = "cd $dir && tree -L 1"
-project = "~/dev/{repo}"
+[files]
+readme = "~/dev/{repo}/README.md"
 ```
 
-**constants**
-
-Define reusable strings or lists in `[constants]`. Use `{constants.name}` in paths and URLs. For shared values, put `[constants]` in `constants.toml` beside the state file and use `{global.name}`.
+Reuse your development directory across paths.
 
 ```toml
 [constants]
 root = "~/dev"
-namespaces = ["dev", "staging", "prod"]
 
-[projects]
-api = "{constants.root}/api"
+[files]
+readme = "{constants.root}/{repo}/README.md"
 ```
 
-**scripts**
-
-Scripts run in Bash by default from the config's directory.
-Reserved key `shell` overrides it with options `bash`, `sh`, and `zsh`.
-Use `$` notation to pass arguments. Use args to prompt users for inputs.
+Add hints and open your editor.
 
 ```toml
-[kube.logs]
+[constants]
+root = "~/dev"
+
+[files]
+filehook = "nvim $file"
+readme = "{constants.root}/{repo}/README.md" # hint: Edit the project README
+```
+
+```sh
+qrlkit files readme qrlkit-rs
+```
+
+Set global defaults with `qrlkit set-filehook`.
+
+### Dirs
+
+Change directories through the shell integration.
+
+```toml
+[dirs]
+project = "~/dev/qrlkit-rs"
+```
+
+Choose the project with an argument.
+
+```toml
+[dirs]
+project = "~/dev/{repo}"
+```
+
+Reuse your development directory across projects.
+
+```toml
+[constants]
+root = "~/dev"
+
+[dirs]
+project = "{constants.root}/{repo}"
+```
+
+Add hints and list directory contents.
+
+```toml
+[constants]
+root = "~/dev"
+
+[dirs]
+dirhook = "cd $dir && ls"
+# hint: Enter and inspect the project
+project = "{constants.root}/{repo}"
+```
+
+```sh
+qrlkit dirs project qrlkit-rs
+```
+
+Set global defaults with `qrlkit set-dirhook`.
+
+### Scripts
+
+Run Bash from the config's directory.
+
+```toml
+[greet]
+run = 'printf "Hello, World!\n"'
+```
+
+Prompt for missing arguments with `args`.
+
+```toml
+[greet]
+args = [{ name = "name" }]
+run = 'printf "Hello, %s!\n" "$1"'
+```
+
+Supply constants through `env` without prompting.
+
+```toml
+[constants]
+name = "World"
+
+[greet]
+run = 'printf "Hello, %s!\n" "$NAME"'
+
+[greet.env]
+NAME = "{constants.name}"
+```
+
+Combine constant values with argument choices.
+
+```toml
+[constants]
+name = "World"
+greetings = ["Hello", "Hi", "Hey"]
+
+[greet]
 args = [
-  { name = "namespace", enum = { ref = "constants.namespaces" } },
-  { name = "pod" },
+  { name = "greeting", enum = { ref = "constants.greetings" } },
+]
+run = 'printf "%s, %s!\n" "$1" "$NAME"'
+
+[greet.env]
+NAME = "{constants.name}"
+```
+
+Add hints and choose your shell.
+
+```toml
+[constants]
+name = "World"
+greetings = ["Hello", "Hi", "Hey"]
+
+[greet]
+hint = "Say hello with some personality"
+shell = "zsh"
+args = [
+  { name = "greeting", enum = { ref = "constants.greetings" } },
 ]
 run = '''
-kubectl logs --namespace "$1" "$2" --follow
+printf '%s, %s!\n' "$1" "$NAME"
+printf 'Have a lovely day!\n'
 '''
-shell = "zsh"
+
+[greet.env]
+NAME = "{constants.name}"
 ```
 
-**hints**
+```sh
+qrlkit greet Hey
+```
 
-Comments with `hint: ` in them will be included in the terminal.
+Supported shells: `bash`, `sh`, and `zsh`.
+
+Constants expand in `env`, never `run`.
+
+### Shared constants
+
+Place `constants.toml` beside your state file.
 
 ```toml
-[launch]
-# hint: Find your next mission
-issues = "https://github.com/ratatui/ratatui/issues"
-
-repo = "https://github.com/ratatui/ratatui" # hint: Browse the source code
+# constants.toml
+[constants]
+root = "~/dev"
+name = "World"
 ```
 
-Run `qrlkit launch` after importing the config:
+Reference shared constants with `{global.name}` syntax.
 
-```text
-> issues        Find your next mission
-  repo          Browse the source code
+```toml
+# QRLs.toml
+[dirs]
+project = "{global.root}/{repo}"
+
+[greet]
+run = 'printf "Hello, %s!\n" "$NAME"'
+
+[greet.env]
+NAME = "{global.name}"
 ```
-
 
 ## Contributing
 
