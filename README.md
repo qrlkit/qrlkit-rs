@@ -113,9 +113,9 @@ cargo install --path .
 ## Version 1 Roadmap
 
 **Version 1 happens January 2027. Until then expect everything to break. 
-Current version is 0.5.5 but any minor version can ship with a breaking change until v1.**
+Current version is 0.10.3 but any minor version can ship with a breaking change until v1.**
 
-### Version 1
+### Version 1.0.0 goals 
 
 #### `qrlkit` ####
 
