@@ -37,6 +37,8 @@ pub struct Entry {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Source {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub themes: BTreeMap<String, crate::theme::Theme>,
     /// Explicit per-file override; absent means use the global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collision_strategy: Option<CollisionStrategy>,
@@ -64,6 +66,8 @@ pub enum CollisionStrategy {
 pub struct State {
     pub version: u32,
     #[serde(default)]
+    pub default_theme: crate::theme::NamedTheme,
+    #[serde(default)]
     pub collision_strategy: CollisionStrategy,
     pub browser: Option<Browser>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,6 +83,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             version: 1,
+            default_theme: crate::theme::NamedTheme::default(),
             collision_strategy: CollisionStrategy::default(),
             browser: None,
             shell: None,
@@ -118,6 +123,9 @@ impl State {
         crate::alias::validate(&self.sources)?;
         let mut keys = std::collections::BTreeSet::new();
         for source in &self.sources {
+            for theme in source.themes.values() {
+                theme.validate()?;
+            }
             for key in &source.removed_keys {
                 ensure!(
                     !key.is_empty() && key.iter().all(|k| crate::import::valid_segment(k)),
@@ -227,6 +235,26 @@ impl State {
         Ok(())
     }
 
+    /// The first registered source containing this path supplies its theme.
+    /// This also makes merged namespaces deterministic.
+    pub fn theme(&self, key: &[String]) -> crate::theme::Theme {
+        let mut theme = self.default_theme.theme();
+        if let Some(source) = self.sources.iter().find(|source| {
+            source
+                .entries
+                .iter()
+                .any(|entry| entry.key.starts_with(key))
+        }) {
+            let original = crate::import::map_key(key, &source.renames, true);
+            for end in 0..=original.len() {
+                if let Some(settings) = source.themes.get(&original[..end].join(" ")) {
+                    theme.overlay(settings);
+                }
+            }
+        }
+        theme
+    }
+
     /// Sorted, distinct immediate children of a path (not a fuzzy key search).
     pub fn children(&self, prefix: &[String]) -> Vec<String> {
         self.sources
@@ -303,6 +331,7 @@ mod tests {
     fn children_are_immediate_sorted_unique_and_prefix_scoped() {
         let mut state = State::default();
         state.sources.push(Source {
+            themes: BTreeMap::new(),
             collision_strategy: None,
             alias: None,
             path: "test.toml".into(),
@@ -344,6 +373,7 @@ mod tests {
         let path = dir.path().join("nested/state.yaml");
         let mut state = State::default();
         state.sources.push(Source {
+            themes: BTreeMap::new(),
             collision_strategy: None,
             alias: None,
             path: "team.toml".into(),

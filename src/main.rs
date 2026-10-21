@@ -12,6 +12,7 @@ mod setup;
 mod shell;
 mod store;
 mod template;
+mod theme;
 mod ui;
 
 use anyhow::{Context, Result, ensure};
@@ -48,6 +49,11 @@ enum Commands {
     },
     /// List registered config files and their effective namespaces
     Ls,
+    /// List available themes or set the default for interactive prompts
+    Themes {
+        #[command(subcommand)]
+        command: Option<ThemeCommands>,
+    },
     /// Remove a key and its descendants, or choose a key interactively
     Rm { keys: Vec<String> },
     /// Refresh all imports, preserving namespace renames
@@ -89,6 +95,15 @@ enum Commands {
     Lookup(Vec<String>),
 }
 
+#[derive(Subcommand)]
+enum ThemeCommands {
+    /// Save the default theme; namespace themes take precedence
+    Set {
+        #[arg(value_enum)]
+        option: theme::NamedTheme,
+    },
+}
+
 fn resolve(sources: &mut [store::Source], strategy: store::CollisionStrategy) -> Result<()> {
     alias::validate(sources)?;
     while let Some((a, b, root)) = import::collision(sources, strategy) {
@@ -118,6 +133,7 @@ fn browse(state: &State, mut key: Vec<String>) -> Result<Option<store::Entry>> {
     loop {
         let children = state.children(&key);
         if children.is_empty() && !key.is_empty() {
+            ui::set_theme(state.theme(&key));
             return Ok(Some(state.lookup(&key)?.clone()));
         }
         if children.is_empty() {
@@ -138,7 +154,15 @@ fn browse(state: &State, mut key: Vec<String>) -> Result<Option<store::Entry>> {
                 ui::key_label(child, hint)
             })
             .collect::<Vec<_>>();
-        let choice = ui::select_key(&options)?;
+        let themes = children
+            .iter()
+            .map(|child| {
+                let mut path = key.clone();
+                path.push(child.clone());
+                state.theme(&path)
+            })
+            .collect::<Vec<_>>();
+        let choice = ui::select_key(&key.join(" "), &options, state.theme(&key), themes)?;
         key.push(children[choice].clone());
     }
 }
@@ -190,6 +214,32 @@ fn run() -> Result<i32> {
         return Ok(0);
     }
     let mut state = State::load(&path)?;
+    if let Commands::Themes { command } = command {
+        match command {
+            Some(ThemeCommands::Set { option }) => {
+                state.default_theme = option;
+                state.save(&path)?;
+                println!("Default theme set to {}", option.name());
+            }
+            None => {
+                println!("Available themes:");
+                for theme in theme::NamedTheme::ALL {
+                    println!(
+                        "  {:<10} {}{}",
+                        theme.name(),
+                        theme.description(),
+                        if theme == state.default_theme {
+                            " (default)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+            }
+        }
+        return Ok(0);
+    }
+    ui::set_theme(state.default_theme.theme());
     if let Commands::Init { shell: None } = command {
         setup::interactive(&mut state, &path)?;
         return Ok(0);
@@ -240,6 +290,7 @@ fn run() -> Result<i32> {
                 for entry in &mut source.entries {
                     entry.key = import::map_key(&entry.key, &source.renames, true);
                 }
+                source.renames.clear();
             }
             &scoped
         } else {
@@ -448,7 +499,8 @@ fn run() -> Result<i32> {
             state.save(&path)?;
             println!("Browser set to {}", state.browser.as_ref().unwrap().name);
         }
-        Commands::ScopedLookup { .. }
+        Commands::Themes { .. }
+        | Commands::ScopedLookup { .. }
         | Commands::Aliases { .. }
         | Commands::Lookup(_)
         | Commands::Nuke

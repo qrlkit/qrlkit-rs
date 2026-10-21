@@ -19,13 +19,15 @@ import time
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/qrlkit").resolve()
 
 
-def run_interactive(root, answers, success=True, command=("init",), directory_channel=False):
+def run_interactive(root, answers, success=True, command=("init",), directory_channel=False, colors=False):
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.update(
             HOME=str(root), ZDOTDIR=str(root), XDG_CONFIG_HOME=str(root),
             SHELL="/bin/zsh", TERM="xterm-256color",
         )
+        if colors:
+            os.environ.pop("NO_COLOR", None)
         if directory_channel:
             os.environ["QRL_CD_FILE"] = str(root / "directory-channel")
         os.execv(str(BINARY), [str(BINARY), "--config", str(root / "state.yaml"), *command])
@@ -358,3 +360,52 @@ args = [{{ name = "repo", enum = ["first", "second repo"] }}]
     assert (root / "opened").read_text() == "https://example.com/second%20repo"
 
 print("Resource enums: selection, text input, partial arguments, and cancellation passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-theme-test-") as directory:
+    root = Path(directory)
+    target = root / "repo.txt"
+    target.write_text("repo")
+    source = root / "resources.toml"
+    source.write_text(f'''theme = {{ border = "rounded", border_color = "#9399b2" }}
+[gh]
+theme = {{ selected = "#cba6f7", text = "#cdd6f4", hint = "#9399b2", marker = "--x", border = "double" }}
+home = "{target}"
+[gh.task]
+args = [{{ name = "Color", enum = ["blue", "red"] }}, {{ name = "Name" }}]
+run = 'printf "%s %s\\n" "$1" "$2"'
+[qk]
+theme = "ocean"
+docs = "{target}"
+''')
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run([str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)], env=env, capture_output=True, check=True)
+    transcript = run_interactive(root, [("--x gh", b"\r"), ("--x home", b"\r")], command=(), colors=True)
+    assert "╭".encode() in transcript and "╔".encode() in transcript, transcript
+    assert b"38;2;203;166;247" in transcript, transcript
+    assert b"38;2;136;192;208" in transcript, transcript
+    assert str(target.resolve()).encode() in transcript
+    transcript = run_interactive(root, [("Color:", b"\r"), ("Name:", b"friend\r")], command=("gh", "task"), colors=True)
+    assert "╔".encode() in transcript and b"--x" in transcript, transcript
+    assert b"blue friend" in transcript, transcript
+    run_interactive(root, [("--x home", b"\x1b")], success=False, command=("gh",))
+    source.write_text(source.read_text().replace('marker = "--x"', 'marker = "->"'))
+    run_interactive(root, [("-> home", b"\r")], command=("gh",))
+
+    source.write_text(source.read_text() + f'\n[plain]\nhome = "{target}"\n')
+    subprocess.run([str(BINARY), "--config", str(root / "state.yaml"), "themes", "set", "forest"], env=env, capture_output=True, check=True)
+    transcript = run_interactive(root, [("home", b"\r")], command=("plain",), colors=True)
+    assert b"38;2;163;190;140" in transcript, transcript
+    transcript = run_interactive(root, [("-> home", b"\r")], command=("gh",), colors=True)
+    assert b"38;2;203;166;247" in transcript, transcript
+    # The custom selection stays purple; the unspecified title inherits forest.
+    assert b"38;2;163;190;140" in transcript, transcript
+    transcript = run_interactive(root, [("docs", b"\r")], command=("qk",), colors=True)
+    assert b"38;2;136;192;208" in transcript, transcript
+    transcript = run_interactive(root, [("Choose the key or namespace", b"\x1b")], success=False, command=("rm",), colors=True)
+    assert b"38;2;163;190;140" in transcript, transcript
+    subprocess.run([str(BINARY), "--config", str(root / "state.yaml"), "themes", "set", "terminal"], env=env, capture_output=True, check=True)
+    transcript = run_interactive(root, [("home", b"\r")], command=("plain",), colors=True)
+    assert b"38;2;163;190;140" not in transcript, transcript
+
+print("Namespace themes: colors, borders, markers, argument prompts, cancellation, and automatic reload passed")
+print("Default themes: persisted selection, namespace overrides, general prompts, and reset passed")

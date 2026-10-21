@@ -1,3 +1,4 @@
+use crate::theme::{Border, Theme};
 use anyhow::{Result, bail, ensure};
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -8,10 +9,138 @@ use ratatui::{
         execute,
         terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
     },
-    layout::Position,
-    widgets::Paragraph,
+    layout::{Position, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Paragraph},
 };
-use std::io::{self, IsTerminal};
+use std::{
+    cell::RefCell,
+    io::{self, IsTerminal},
+};
+
+thread_local! {
+    static THEME: RefCell<Theme> = RefCell::new(Theme::default());
+}
+
+pub fn set_theme(theme: Theme) {
+    THEME.with(|current| *current.borrow_mut() = theme);
+}
+
+fn style(color: Option<&str>) -> Style {
+    Style::default().fg(color
+        .and_then(|value| crate::theme::color(value).ok())
+        .unwrap_or(Color::Reset))
+}
+
+fn option_line(option: &str, selected: bool, theme: &Theme, marker_width: usize) -> Line<'static> {
+    let marker = theme.marker();
+    let width = Line::raw(marker).width();
+    let prefix = if selected {
+        format!(
+            "{marker}{} ",
+            " ".repeat(marker_width.saturating_sub(width))
+        )
+    } else {
+        " ".repeat(marker_width + 1)
+    };
+    let row_style = if selected {
+        let style = style(theme.selected.as_deref().or(theme.text.as_deref()));
+        if theme
+            .selected
+            .as_deref()
+            .is_some_and(|color| color != "default")
+        {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            style
+        }
+    } else {
+        style(theme.text.as_deref().or(theme.selected.as_deref()))
+    };
+    let (key, hint) = option.split_once("        ").unwrap_or((option, ""));
+    let mut spans = vec![
+        Span::styled(prefix, row_style),
+        Span::styled(key.to_owned(), row_style),
+    ];
+    if !hint.is_empty() {
+        spans.push(Span::styled(
+            format!("        {hint}"),
+            if theme.hint.is_some() {
+                style(theme.hint.as_deref())
+            } else {
+                row_style
+            },
+        ));
+    }
+    Line::from(spans)
+}
+
+fn draw_prompt(frame: &mut ratatui::Frame, data: &PromptRequest, selected: usize, text: &str) {
+    let theme = &data.theme;
+    let mut area = frame.area();
+    let border = theme.border.unwrap_or_default();
+    if border != Border::None {
+        let border_type = match border {
+            Border::Rounded => BorderType::Rounded,
+            Border::Double => BorderType::Double,
+            _ => BorderType::Plain,
+        };
+        let block = Block::bordered()
+            .border_type(border_type)
+            .border_style(style(theme.border_color.as_deref()))
+            .title(Line::styled(
+                data.title.clone(),
+                style(theme.title.as_deref()),
+            ));
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        area = inner;
+    } else if !data.minimal {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                data.title.clone(),
+                style(theme.title.as_deref()),
+            )),
+            Rect::new(area.x, area.y, area.width, area.height.min(1)),
+        );
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(1);
+    }
+    if data.input {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!("{} {text}", theme.marker()),
+                style(theme.text.as_deref()),
+            )),
+            area,
+        );
+        return;
+    }
+    let marker_width = std::iter::once(theme)
+        .chain(data.row_themes.iter())
+        .map(|theme| Line::raw(theme.marker()).width())
+        .max()
+        .unwrap_or(1);
+    let rows = usize::from(area.height);
+    let offset = selected.saturating_sub(rows.saturating_sub(1));
+    let lines = data
+        .options
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(rows)
+        .map(|(i, option)| {
+            option_line(
+                option,
+                i == selected,
+                data.row_themes.get(i).unwrap_or(theme),
+                marker_width,
+            )
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), area);
+}
 
 struct Restore {
     origin: Option<Position>,
@@ -42,13 +171,16 @@ impl Drop for Restore {
     }
 }
 
-fn render_prompt(
-    title: &str,
-    options: &[String],
-    input: bool,
-    minimal: bool,
-    allow_empty: bool,
-) -> Result<String> {
+fn render_prompt(data: &PromptRequest) -> Result<String> {
+    let PromptRequest {
+        title,
+        options,
+        input,
+        minimal,
+        allow_empty,
+        ..
+    } = data;
+    let (input, minimal, allow_empty) = (*input, *minimal, *allow_empty);
     ensure!(
         io::stdin().is_terminal() && io::stderr().is_terminal(),
         "{title}: an interactive terminal is required"
@@ -58,7 +190,16 @@ fn render_prompt(
     let mut terminal = Terminal::with_options(
         CrosstermBackend::new(io::stderr()),
         TerminalOptions {
-            viewport: Viewport::Inline(prompt_height(options.len(), input, minimal)),
+            viewport: Viewport::Inline(if data.theme.border.unwrap_or_default() == Border::None {
+                prompt_height(options.len(), input, minimal)
+            } else {
+                if input {
+                    1
+                } else {
+                    options.len().max(1).min(usize::from(u16::MAX - 2)) as u16
+                }
+                .saturating_add(2)
+            }),
         },
     )?;
     let mut selected = 0usize;
@@ -66,28 +207,7 @@ fn render_prompt(
     let result = loop {
         terminal.draw(|frame| {
             restore.origin = Some(frame.area().as_position());
-            let mut lines = if minimal {
-                vec![]
-            } else {
-                vec![title.to_owned()]
-            };
-            if input {
-                lines.push(format!("> {text}"));
-            } else {
-                let rows = if minimal {
-                    usize::from(frame.area().height).max(1)
-                } else {
-                    options.len().max(1)
-                };
-                for (i, option) in options.iter().enumerate().take(rows) {
-                    lines.push(format!(
-                        "{} {}",
-                        if i == selected { ">" } else { " " },
-                        option
-                    ));
-                }
-            }
-            frame.render_widget(Paragraph::new(lines.join("\n")), frame.area());
+            draw_prompt(frame, data, selected, &text);
         })?;
         if let Event::Key(key) = event::read()? {
             if key.kind != KeyEventKind::Press {
@@ -125,6 +245,83 @@ mod tests {
     use super::{key_label, prompt_height};
 
     #[test]
+    fn mixed_markers_align_keys_and_style_hints() {
+        use super::*;
+        use ratatui::{Terminal, backend::TestBackend};
+        let wide = Theme {
+            marker: Some("界".into()),
+            selected: Some("#abcdef".into()),
+            hint: Some("#112233".into()),
+            ..Theme::default()
+        };
+        let long = Theme {
+            marker: Some("--x".into()),
+            ..Theme::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(40, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    Paragraph::new(vec![
+                        option_line("repo        My repository", true, &wide, 3),
+                        option_line("docs", false, &long, 3),
+                    ]),
+                    frame.area(),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(4, 0)].symbol(), "r");
+        assert_eq!(buffer[(4, 1)].symbol(), "d");
+        assert_eq!(buffer[(4, 0)].fg, Color::Rgb(171, 205, 239));
+        assert_eq!(buffer[(16, 0)].fg, Color::Rgb(17, 34, 51));
+        assert_eq!(buffer[(4, 0)].bg, Color::Reset);
+    }
+
+    #[test]
+    fn borders_titles_and_scrolling_keep_selected_row_visible() {
+        use super::*;
+        use ratatui::{Terminal, backend::TestBackend};
+        for (border, corner) in [
+            (Border::Plain, "┌"),
+            (Border::Rounded, "╭"),
+            (Border::Double, "╔"),
+        ] {
+            let data = PromptRequest {
+                title: "gh".into(),
+                options: vec!["home".into(), "issues".into(), "repo".into()],
+                input: false,
+                minimal: true,
+                allow_empty: false,
+                theme: Theme {
+                    border: Some(border),
+                    border_color: Some("#112233".into()),
+                    marker: Some("--x".into()),
+                    ..Theme::default()
+                },
+                row_themes: vec![],
+            };
+            let mut terminal = Terminal::new(TestBackend::new(20, 3)).unwrap();
+            terminal
+                .draw(|frame| draw_prompt(frame, &data, 2, ""))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(0, 0)].symbol(), corner);
+            assert_eq!(buffer[(0, 0)].fg, Color::Rgb(17, 34, 51));
+            assert_eq!(buffer[(1, 0)].symbol(), "g");
+            assert_eq!(buffer[(1, 1)].symbol(), "-");
+            assert_eq!(buffer[(5, 1)].symbol(), "r");
+            // Tiny terminals must not panic, even when borders consume all space.
+            let mut tiny = Terminal::new(TestBackend::new(1, 1)).unwrap();
+            tiny.draw(|frame| draw_prompt(frame, &data, 2, "")).unwrap();
+        }
+        let old = "title: Test\noptions: [repo]\ninput: false\nminimal: true\n";
+        let data: PromptRequest = serde_yaml_ng::from_str(old).unwrap();
+        assert_eq!(data.theme, Theme::default());
+        assert!(data.row_themes.is_empty());
+    }
+
+    #[test]
     fn hint_labels_preserve_keys_and_stay_on_one_row() {
         assert_eq!(
             key_label("repo", Some("Opens repo")),
@@ -155,6 +352,10 @@ struct PromptRequest {
     minimal: bool,
     #[serde(default)]
     allow_empty: bool,
+    #[serde(default)]
+    theme: Theme,
+    #[serde(default)]
+    row_themes: Vec<Theme>,
 }
 
 // Crossterm sends cursor queries to stdout. Isolate the prompt in a child whose
@@ -166,19 +367,26 @@ fn prompt(
     minimal: bool,
     allow_empty: bool,
 ) -> Result<String> {
-    ensure!(
-        io::stdin().is_terminal() && io::stderr().is_terminal(),
-        "{title}: an interactive terminal is required"
-    );
-    let request = tempfile::NamedTempFile::new()?;
-    let response = tempfile::NamedTempFile::new()?;
     let data = PromptRequest {
         title: title.into(),
         options: options.to_vec(),
         input,
         minimal,
         allow_empty,
+        theme: THEME.with(|theme| theme.borrow().clone()),
+        row_themes: vec![],
     };
+    send_prompt(data)
+}
+
+fn send_prompt(data: PromptRequest) -> Result<String> {
+    ensure!(
+        io::stdin().is_terminal() && io::stderr().is_terminal(),
+        "{}: an interactive terminal is required",
+        data.title
+    );
+    let request = tempfile::NamedTempFile::new()?;
+    let response = tempfile::NamedTempFile::new()?;
     std::fs::write(request.path(), serde_yaml_ng::to_string(&data)?)?;
     let status = std::process::Command::new(std::env::current_exe()?)
         .arg("__prompt")
@@ -194,18 +402,15 @@ fn prompt(
 
 pub fn run_prompt(request: &std::path::Path, response: &std::path::Path) -> Result<()> {
     let data: PromptRequest = serde_yaml_ng::from_str(&std::fs::read_to_string(request)?)?;
+    data.theme.validate()?;
+    for theme in &data.row_themes {
+        theme.validate()?;
+    }
     ensure!(
         data.input || !data.options.is_empty(),
         "No options available"
     );
-    let result = render_prompt(
-        &data.title,
-        &data.options,
-        data.input,
-        data.minimal,
-        data.allow_empty,
-    )
-    .map_err(|error| error.to_string());
+    let result = render_prompt(&data).map_err(|error| error.to_string());
     std::fs::write(response, serde_yaml_ng::to_string(&result)?)?;
     Ok(())
 }
@@ -239,7 +444,21 @@ pub fn key_label(key: &str, hint: Option<&str>) -> String {
 }
 
 /// Resource navigation only: keys, optional hints, and a selection marker.
-pub fn select_key(options: &[String]) -> Result<usize> {
+pub fn select_key(
+    title: &str,
+    options: &[String],
+    theme: Theme,
+    row_themes: Vec<Theme>,
+) -> Result<usize> {
     ensure!(!options.is_empty(), "No keys available");
-    Ok(prompt("Resource selection", options, false, true, false)?.parse()?)
+    Ok(send_prompt(PromptRequest {
+        title: title.to_owned(),
+        options: options.to_vec(),
+        input: false,
+        minimal: true,
+        allow_empty: false,
+        theme,
+        row_themes,
+    })?
+    .parse()?)
 }

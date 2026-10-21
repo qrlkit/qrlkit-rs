@@ -1303,3 +1303,92 @@ fn remove_namespace_spans_sources_and_preserves_renamed_exclusions() {
     assert!(run(&config, &["rm", "xy"]).status.success());
     assert!(run(&config, &["ls"]).status.success());
 }
+
+#[test]
+fn invalid_namespace_theme_does_not_replace_saved_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let source = dir.path().join("resources.toml");
+    fs::write(
+        &source,
+        "[gh]\ntheme = { selected = '#cba6f7', marker = '--x' }\nhome = 'https://github.com'",
+    )
+    .unwrap();
+    assert!(
+        run(&config, &["add", source.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let before = fs::read(&config).unwrap();
+    fs::write(
+        &source,
+        "[gh]\ntheme = { border = 'invalid' }\nhome = 'https://github.com'",
+    )
+    .unwrap();
+    assert!(!run(&config, &["reload"]).status.success());
+    assert_eq!(fs::read(&config).unwrap(), before);
+}
+
+#[test]
+fn themes_list_defaults_and_validate_names_without_writing_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("state.yaml");
+    let output = run(&config, &["themes"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for name in ["terminal", "ocean", "forest", "rose"] {
+        assert!(text.lines().any(|line| line.trim_start().starts_with(name)));
+    }
+    assert!(
+        text.lines()
+            .any(|line| line.contains("terminal") && line.contains("(default)"))
+    );
+    for args in [
+        vec!["themes", "set", "unknown"],
+        vec!["themes", "set"],
+        vec!["themes", "unknown"],
+    ] {
+        assert!(!run(&config, &args).status.success());
+    }
+    assert!(run(&config, &["themes", "--help"]).status.success());
+    assert!(run(&config, &["themes", "set", "--help"]).status.success());
+    assert!(!config.exists());
+    for name in ["ocean", "forest", "rose", "terminal"] {
+        assert!(run(&config, &["themes", "set", name]).status.success());
+        let saved = fs::read(&config).unwrap();
+        let state: serde_json::Value = serde_yaml_ng::from_slice(&saved).unwrap();
+        assert_eq!(state["default_theme"], name);
+        let output = run(&config, &["themes"]);
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            text.lines()
+                .any(|line| line.trim_start().starts_with(name) && line.ends_with("(default)"))
+        );
+        assert_eq!(text.matches("(default)").count(), 1);
+        assert_eq!(fs::read(&config).unwrap(), saved);
+        assert!(!run(&config, &["themes", "set", "unknown"]).status.success());
+        assert_eq!(fs::read(&config).unwrap(), saved);
+    }
+}
+
+#[test]
+fn default_theme_changes_preserve_imports_and_work_when_sources_are_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let source = dir.path().join("resources.toml");
+    fs::write(&source, "[gh]\ntheme = 'rose'\nhome = 'https://github.com'").unwrap();
+    assert!(
+        run(&config, &["add", source.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let before: serde_json::Value = serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    fs::remove_file(&source).unwrap();
+    assert!(run(&config, &["themes", "set", "forest"]).status.success());
+    let after: serde_json::Value = serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let mut expected = before;
+    expected["default_theme"] = "forest".into();
+    assert_eq!(after, expected);
+    assert!(run(&config, &["themes"]).status.success());
+}

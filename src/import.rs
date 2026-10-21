@@ -100,6 +100,8 @@ pub fn read_with_constants(
     } else {
         None
     };
+    let mut themes = BTreeMap::new();
+    crate::theme::extract(&mut value, &mut vec![], &mut themes)?;
     let mut entries = vec![];
     flatten(
         &value,
@@ -121,6 +123,7 @@ pub fn read_with_constants(
         entry.key = map_key(&entry.key, &renames, false);
     }
     Ok(Source {
+        themes,
         collision_strategy: None,
         alias,
         path,

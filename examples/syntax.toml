@@ -1,5 +1,8 @@
 # qrlkit add examples/syntax.toml
 
+# Default picker box; namespaces inherit and can override individual fields.
+theme = { border = "rounded", border_color = "#9399b2" }
+
 # Reusable values local to this file
 [constants]
 root = "/home/bob/work"
@@ -7,12 +10,16 @@ release_types = ["major", "minor", "patch"]
 
 # Open a URL
 [web]
+# Named palette for this namespace and its resources
+theme = "ocean"
 # hint: Opens the documentation
 docs = "https://docs.rs/ratatui/latest/ratatui/"
 
 # Relative to your shell: change directory or print a file path
 # Hints can also go after the value.
 [paths]
+# Custom colors and selection marker
+theme = { selected = "#cba6f7", hint = "#9399b2", marker = "--x", border = "double" }
 repo = "./" # hint: Opens repo
 # Absolute path
 project = "{constants.root}/project"
