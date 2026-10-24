@@ -1,0 +1,16 @@
+# Dracula Classic
+# Upstream palette: https://draculatheme.com/spec
+# Mapping: base/text, accent/selection foreground and title, highlight/selection
+# background, secondary text/hints. Border shape is a qrlkit presentation choice.
+[theme]
+name = "dracula"
+background = "#282a36"
+text = "#f8f8f2"
+selected = "#bd93f9"
+selected_background = "#44475a"
+hint = "#6272a4"
+title = "#bd93f9"
+border = "rounded"
+border_color = "#bd93f9"
+marker = ">"
+selection_width = "row"

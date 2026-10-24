@@ -1303,3 +1303,53 @@ fn remove_namespace_spans_sources_and_preserves_renamed_exclusions() {
     assert!(run(&config, &["rm", "xy"]).status.success());
     assert!(run(&config, &["ls"]).status.success());
 }
+
+#[test]
+fn invalid_namespace_theme_does_not_replace_saved_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let source = dir.path().join("resources.toml");
+    fs::write(
+        &source,
+        "[gh]\ntheme = { selected = '#cba6f7', marker = '--x' }\nhome = 'https://github.com'",
+    )
+    .unwrap();
+    assert!(
+        run(&config, &["add", source.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let before = fs::read(&config).unwrap();
+    fs::write(
+        &source,
+        "[gh]\ntheme = { border = 'invalid' }\nhome = 'https://github.com'",
+    )
+    .unwrap();
+    assert!(!run(&config, &["reload"]).status.success());
+    assert_eq!(fs::read(&config).unwrap(), before);
+}
+
+#[test]
+fn default_theme_changes_preserve_imports_and_work_when_sources_are_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = seeded_config(dir.path());
+    let source = dir.path().join("resources.toml");
+    fs::write(
+        &source,
+        "[gh]\ntheme = 'dracula'\nhome = 'https://github.com'",
+    )
+    .unwrap();
+    assert!(
+        run(&config, &["add", source.to_str().unwrap()])
+            .status
+            .success()
+    );
+    let before: serde_json::Value = serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    fs::remove_file(&source).unwrap();
+    assert!(run(&config, &["themes", "set", "nord"]).status.success());
+    let after: serde_json::Value = serde_yaml_ng::from_slice(&fs::read(&config).unwrap()).unwrap();
+    let mut expected = before;
+    expected["default_theme"] = "nord".into();
+    assert_eq!(after, expected);
+    assert!(run(&config, &["themes"]).status.success());
+}

@@ -1,5 +1,8 @@
 # qrlkit add examples/syntax.toml
 
+# File-level theme for namespaces without their own complete theme.
+theme = { border = "rounded", border_color = "#9399b2" }
+
 # Reusable values local to this file
 [constants]
 root = "/home/bob/work"
@@ -7,6 +10,8 @@ release_types = ["major", "minor", "patch"]
 
 # Open a URL
 [web]
+# Named palette for this namespace and its resources
+theme = "catppuccin-mocha"
 # hint: Opens the documentation
 docs = "https://docs.rs/ratatui/latest/ratatui/"
 
@@ -17,6 +22,16 @@ repo = "./" # hint: Opens repo
 # Absolute path
 project = "{constants.root}/project"
 readme = "./README.md"
+
+# A custom theme replaces the parent theme; omitted fields use terminal defaults.
+[paths.theme]
+background = "#1e1e2e" # Use "default" to restore the terminal background
+selected = "#cba6f7"
+selected_background = "#45475a"
+selection_width = "row" # Or "content" for the marker, key, and hint only
+hint = "#9399b2"
+marker = "--x"
+border = "double"
 
 # qrlkit scripts greet "friend"
 [scripts.greet]

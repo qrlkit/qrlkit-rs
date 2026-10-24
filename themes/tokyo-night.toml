@@ -1,0 +1,16 @@
+# Tokyo Night (Night variant)
+# Upstream palette: https://github.com/folke/tokyonight.nvim/blob/main/extras/kitty/tokyonight_night.conf
+# Mapping: base/text, accent/selection foreground and title, highlight/selection
+# background, secondary text/hints. Border shape is a qrlkit presentation choice.
+[theme]
+name = "tokyo-night"
+background = "#1a1b26"
+text = "#c0caf5"
+selected = "#7aa2f7"
+selected_background = "#283457"
+hint = "#a9b1d6"
+title = "#7aa2f7"
+border = "rounded"
+border_color = "#7aa2f7"
+marker = ">"
+selection_width = "row"

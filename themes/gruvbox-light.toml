@@ -1,0 +1,16 @@
+# Gruvbox Light (medium contrast)
+# Upstream palette: https://github.com/morhetz/gruvbox/blob/master/colors/gruvbox.vim
+# Mapping: base/text, accent/selection foreground and title, highlight/selection
+# background, secondary text/hints. Border shape is a qrlkit presentation choice.
+[theme]
+name = "gruvbox-light"
+background = "#fbf1c7"
+text = "#3c3836"
+selected = "#9d0006"
+selected_background = "#d5c4a1"
+hint = "#665c54"
+title = "#9d0006"
+border = "plain"
+border_color = "#928374"
+marker = ">"
+selection_width = "row"

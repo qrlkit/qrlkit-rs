@@ -19,17 +19,19 @@ import time
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else "target/debug/qrlkit").resolve()
 
 
-def run_interactive(root, answers, success=True, command=("init",), directory_channel=False):
+def run_interactive(root, answers, success=True, command=("init",), directory_channel=False, colors=False, on_step=None, size=(30, 180), verify_terminal=False):
     pid, fd = pty.fork()
     if pid == 0:
         os.environ.update(
             HOME=str(root), ZDOTDIR=str(root), XDG_CONFIG_HOME=str(root),
             SHELL="/bin/zsh", TERM="xterm-256color",
         )
+        if colors:
+            os.environ.pop("NO_COLOR", None)
         if directory_channel:
             os.environ["QRL_CD_FILE"] = str(root / "directory-channel")
         os.execv(str(BINARY), [str(BINARY), "--config", str(root / "state.yaml"), *command])
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 180, 0, 0))
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", *size, 0, 0))
     transcript = b""
     pending = b""
     query_tail = b""
@@ -56,6 +58,8 @@ def run_interactive(root, answers, success=True, command=("init",), directory_ch
                 visible = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", pending)
                 visible = b"".join(visible.split())
                 if step < len(answers) and b"".join(answers[step][0].encode().split()) in visible:
+                    if on_step is not None:
+                        on_step(step, transcript)
                     os.write(fd, answers[step][1])
                     pending = b""
                     step += 1
@@ -75,6 +79,9 @@ def run_interactive(root, answers, success=True, command=("init",), directory_ch
         assert step == len(answers), f"Missing prompts: {transcript!r}"
         assert (os.waitstatus_to_exitcode(status) == 0) == success, transcript
         assert b"required arguments" not in transcript
+        if verify_terminal:
+            mode = termios.tcgetattr(fd)
+            assert mode[3] & termios.ICANON and mode[3] & termios.ECHO, "Terminal input was not restored"
     finally:
         if status is None:
             os.kill(pid, signal.SIGKILL)
@@ -358,3 +365,150 @@ args = [{{ name = "repo", enum = ["first", "second repo"] }}]
     assert (root / "opened").read_text() == "https://example.com/second%20repo"
 
 print("Resource enums: selection, text input, partial arguments, and cancellation passed")
+
+# Theme policy, whole-theme replacement, and live picker acceptance tests.
+with tempfile.TemporaryDirectory(prefix="qrl-theme-test-") as directory:
+    root = Path(directory)
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+
+    def theme_command(*args):
+        return subprocess.run([str(BINARY), "--config", str(root / "state.yaml"), "themes", *args],
+                              env=env, capture_output=True, text=True, check=True)
+
+    target = root / "repo.txt"
+    target.write_text("repo")
+    source = root / "resources.toml"
+    source.write_text(f'''[gh]
+theme = "dracula"
+home = "{target}"
+[gh.partial]
+theme = {{ marker = "--x" }}
+repo = "{target}"
+[gh.task]
+args = [{{ name = "Color", enum = ["blue", "red"] }}, {{ name = "Name" }}]
+run = 'printf "%s %s\\n" "$1" "$2"'
+[qk]
+theme = "catppuccin-mocha"
+docs = "{target}"
+[plain]
+home = "{target}"
+''')
+    subprocess.run([str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+                   env=env, capture_output=True, check=True)
+    theme_command("set", "nord")
+    transcript = run_interactive(root, [("home", b"\r")], command=("gh",), colors=True)
+    assert b"48;2;40;42;54" in transcript, transcript  # Dracula background
+    assert b"48;2;46;52;64" not in transcript, transcript  # No Nord mixing
+    transcript = run_interactive(root, [("--x repo", b"\r")], command=("gh", "partial"), colors=True)
+    assert b"48;2;40;42;54" not in transcript and b"48;2;46;52;64" not in transcript, transcript
+    assert "╭".encode() not in transcript, transcript  # Missing border uses none
+    transcript = run_interactive(root, [("Color:", b"\r"), ("Name:", b"friend\r")], command=("gh", "task"), colors=True)
+    assert b"48;2;40;42;54" in transcript and b"blue friend" in transcript, transcript
+    theme_command("tools", "deny", "gh")
+    for path in (("gh",), ("gh", "partial")):
+        transcript = run_interactive(root, [("repo" if len(path) == 2 else "home", b"\r")], command=path, colors=True)
+        assert b"48;2;46;52;64" in transcript, transcript
+        assert b"48;2;40;42;54" not in transcript, transcript
+        assert b"--x" not in transcript, transcript
+    transcript = run_interactive(root, [("docs", b"\r")], command=("qk",), colors=True)
+    assert b"48;2;30;30;46" in transcript, transcript  # Other tools unaffected
+    theme_command("tools", "off")
+    transcript = run_interactive(root, [("docs", b"\r")], command=("qk",), colors=True)
+    assert b"48;2;46;52;64" in transcript, transcript
+    theme_command("tools", "on")
+    assert "gh" in theme_command("current").stdout
+    theme_command("tools", "reset", "gh")
+    transcript = run_interactive(root, [("home", b"\r")], command=("gh",), colors=True)
+    assert b"48;2;40;42;54" in transcript, transcript
+
+    # Preview every packaged theme without writing settings or emitting escapes to pipes.
+    before = (root / "state.yaml").read_bytes()
+    transcript = run_interactive(root, [], command=("themes",), colors=True)
+    for rgb in (b"40;42;54", b"30;30;46", b"239;241;245", b"26;27;38", b"40;40;40", b"251;241;199", b"46;52;64"):
+        assert b"48;2;" + rgb in transcript, transcript
+    assert transcript.count(b"Open repository") == 8, transcript
+    assert (root / "state.yaml").read_bytes() == before
+    previous_no_color = os.environ.get("NO_COLOR")
+    try:
+        os.environ["NO_COLOR"] = "1"
+        transcript = run_interactive(root, [], command=("themes",))
+        assert b"\x1b[" not in transcript, transcript
+        assert transcript.count(b"Open repository") == 8, transcript
+        transcript = run_interactive(root, [("home", b"\r")], command=("gh",))
+        assert b"48;2;" not in transcript and b"38;2;" not in transcript, transcript
+    finally:
+        if previous_no_color is None:
+            os.environ.pop("NO_COLOR", None)
+        else:
+            os.environ["NO_COLOR"] = previous_no_color
+
+    # The current theme starts selected. Each move previews without saving.
+    theme_command("set", "terminal")
+    before = (root / "state.yaml").read_bytes()
+
+    def unchanged(step, transcript):
+        assert (root / "state.yaml").read_bytes() == before, "Navigation saved a theme before Enter"
+
+    transcript = run_interactive(root, [
+        ("Choose theme: terminal", b"k"),
+        ("Choose theme: nord", b"\x1b[A"),
+        ("Choose theme: gruvbox-light", b"\x1b[B"),
+        ("Choose theme: nord", b"j"),
+        ("Choose theme: terminal", b"k"),
+        ("Choose theme: nord", b"\r"),
+    ], command=("theme", "set"), colors=True, on_step=unchanged, verify_terminal=True)
+    assert b"48;2;46;52;64" in transcript and b"48;2;251;241;199" in transcript, transcript
+    assert "╭".encode() in transcript and "┌".encode() in transcript, transcript
+    assert "Global theme: nord" in theme_command("current").stdout
+    assert b"Default theme set to nord" in transcript, transcript
+    assert b"\x1b[49m" in transcript or b"\x1b[0m" in transcript, transcript
+
+    # Imported themes join the picker and can change marker, border, and selection width.
+    personal = root / "personal.toml"
+    personal.write_text('''[theme]
+name = "zz-personal"
+background = "#101112"
+selected = "#ffffff"
+selected_background = "#202122"
+text = "#dddddd"
+hint = "#cccccc"
+title = "#abcdef"
+border = "double"
+border_color = "#abcdef"
+marker = "--x"
+selection_width = "content"
+''')
+    theme_command("add", str(personal))
+    personal.unlink()
+    before = (root / "state.yaml").read_bytes()
+    for cancel in (b"\x1b", b"\x03"):
+        transcript = run_interactive(root, [
+            ("Choose theme: nord", b"\x1b[B" * 40),
+            ("--x zz-personal", cancel),
+        ], command=("themes", "set"), colors=True, on_step=unchanged, verify_terminal=True)
+        assert b"48;2;16;17;18" in transcript and "╔".encode() in transcript, transcript
+        assert (root / "state.yaml").read_bytes() == before
+        assert "Global theme: nord" in theme_command("current").stdout
+    # Selection remains visible when a small viewport must scroll and borders change.
+    transcript = run_interactive(root, [
+        ("> nord", b"\x1b[B" * 40),
+        ("--x zz-personal", b"\x1b"),
+    ], command=("themes", "set"), colors=True, size=(6, 28), on_step=unchanged, verify_terminal=True)
+    assert (root / "state.yaml").read_bytes() == before
+    transcript = run_interactive(root, [
+        ("Choose theme: nord", b"\x1b[B" * 40),
+        ("--x zz-personal", b"\r"),
+    ], command=("themes", "set"), colors=True, on_step=unchanged, verify_terminal=True)
+    assert "Global theme: zz-personal" in theme_command("current").stdout
+    transcript = run_interactive(root, [("--x home", b"\r")], command=("plain",), colors=True)
+    assert b"48;2;16;17;18" in transcript, transcript
+
+    # Background modes still work for custom tools after replacing whole themes.
+    original = source.read_text()
+    for width in ("row", "content"):
+        source.write_text(original.replace('theme = "dracula"', f'theme = {{ marker = "->", background = "#1e1e2e", selected_background = "#45475a", selection_width = "{width}" }}'))
+        transcript = run_interactive(root, [("-> home", b"\r")], command=("gh",), colors=True)
+        assert b"48;2;30;30;46" in transcript and b"48;2;69;71;90" in transcript, transcript
+    source.write_text(original)
+
+print("Themes: packaged previews, no mixing, global/tool policy, live selection, cancellation, custom imports, and narrow terminals passed")
