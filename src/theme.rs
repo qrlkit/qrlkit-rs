@@ -4,52 +4,6 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub enum NamedTheme {
-    #[default]
-    Terminal,
-    Ocean,
-    Forest,
-    Rose,
-}
-
-impl NamedTheme {
-    pub const ALL: [Self; 4] = [Self::Terminal, Self::Ocean, Self::Forest, Self::Rose];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Terminal => "terminal",
-            Self::Ocean => "ocean",
-            Self::Forest => "forest",
-            Self::Rose => "rose",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Terminal => "Terminal default colors",
-            Self::Ocean => "Blue/cyan (#88c0d0)",
-            Self::Forest => "Green (#a3be8c)",
-            Self::Rose => "Pink (#eba0ac)",
-        }
-    }
-
-    pub fn theme(self) -> Theme {
-        let accent = match self {
-            Self::Terminal => "default",
-            Self::Ocean => "#88c0d0",
-            Self::Forest => "#a3be8c",
-            Self::Rose => "#eba0ac",
-        };
-        Theme {
-            selected: Some(accent.into()),
-            title: Some(accent.into()),
-            ..Theme::default()
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Border {
@@ -60,9 +14,23 @@ pub enum Border {
     Double,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SelectionWidth {
+    #[default]
+    Row,
+    Content,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_width: Option<SelectionWidth>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,22 +61,14 @@ pub fn color(value: &str) -> Result<Color> {
 }
 
 impl Theme {
-    pub fn overlay(&mut self, other: &Self) {
-        macro_rules! merge {
-            ($($field:ident),*) => {$(if other.$field.is_some() { self.$field = other.$field.clone(); })*};
-        }
-        merge!(selected, text, hint, title, border_color, marker);
-        if other.border.is_some() {
-            self.border = other.border;
-        }
-    }
-
     pub fn marker(&self) -> &str {
         self.marker.as_deref().unwrap_or(">")
     }
 
     pub fn validate(&self) -> Result<()> {
         for value in [
+            &self.background,
+            &self.selected_background,
             &self.selected,
             &self.text,
             &self.hint,
@@ -135,13 +95,7 @@ impl Theme {
 
     fn parse(node: Node) -> Result<Self> {
         let theme = match node {
-            Node::String(name) => NamedTheme::ALL
-                .into_iter()
-                .find(|theme| theme.name() == name)
-                .with_context(|| {
-                    format!("Unknown theme: {name}; use terminal, ocean, forest, or rose")
-                })?
-                .theme(),
+            Node::String(name) => named(&name)?,
             Node::Table(table) => {
                 let values = table
                     .into_iter()
@@ -191,100 +145,252 @@ pub fn extract(
     Ok(())
 }
 
+/// The same strict file format is used for packaged and personal themes.
+pub fn read_file(text: &str) -> Result<(String, Theme)> {
+    let Node::Table(mut root) = crate::format::parse(std::path::Path::new("theme.toml"), text)?
+    else {
+        unreachable!()
+    };
+    let Node::Table(mut table) = root
+        .remove("theme")
+        .context("Theme file requires [theme]")?
+    else {
+        bail!("theme must be a table");
+    };
+    ensure!(
+        root.is_empty(),
+        "Theme file accepts only [theme]; name belongs inside [theme]"
+    );
+    let name = table.remove("name").context("theme.name is required")?;
+    let name = name
+        .as_str()
+        .context("theme.name must be a string")?
+        .to_owned();
+    valid_name(&name)?;
+    Ok((name, Theme::parse(Node::Table(table))?))
+}
+
+pub fn valid_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.len() <= 64
+            && name
+                .bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_')),
+        "Theme name must be 1–64 lowercase letters, digits, hyphens, or underscores, starting with a letter or digit"
+    );
+    Ok(())
+}
+
+pub const FILES: &[(&str, &str)] = &[
+    ("terminal", include_str!("../themes/terminal.toml")),
+    ("dracula", include_str!("../themes/dracula.toml")),
+    (
+        "catppuccin-mocha",
+        include_str!("../themes/catppuccin-mocha.toml"),
+    ),
+    (
+        "catppuccin-latte",
+        include_str!("../themes/catppuccin-latte.toml"),
+    ),
+    ("tokyo-night", include_str!("../themes/tokyo-night.toml")),
+    ("gruvbox-dark", include_str!("../themes/gruvbox-dark.toml")),
+    (
+        "gruvbox-light",
+        include_str!("../themes/gruvbox-light.toml"),
+    ),
+    ("nord", include_str!("../themes/nord.toml")),
+];
+
+pub fn packaged() -> &'static BTreeMap<String, Theme> {
+    static THEMES: std::sync::OnceLock<BTreeMap<String, Theme>> = std::sync::OnceLock::new();
+    THEMES.get_or_init(|| {
+        FILES
+            .iter()
+            .map(|(expected, text)| {
+                let (name, theme) =
+                    read_file(text).expect("packaged theme must pass catalog tests");
+                assert_eq!(&name, expected, "packaged theme name must match its file");
+                (name, theme)
+            })
+            .collect()
+    })
+}
+
+pub fn named(name: &str) -> Result<Theme> {
+    packaged().get(name).cloned().with_context(|| {
+        format!("Unknown theme: {name}; run qrlkit themes to list available themes")
+    })
+}
+
+pub fn catalog(custom: &BTreeMap<String, Theme>) -> BTreeMap<String, Theme> {
+    let mut themes = packaged().clone();
+    themes.extend(custom.clone());
+    themes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{import, store::State};
 
     #[test]
-    fn namespaces_inherit_override_rename_and_reload_across_formats() {
+    fn packaged_themes_are_unique_complete_valid_and_use_the_import_format() {
+        let mut names = std::collections::BTreeSet::new();
+        for (expected, text) in FILES {
+            let (name, theme) = read_file(text).unwrap();
+            assert_eq!(&name, expected);
+            assert!(names.insert(name.clone()));
+            assert_eq!(named(&name).unwrap(), theme);
+            for field in [
+                &theme.background,
+                &theme.selected_background,
+                &theme.selected,
+                &theme.text,
+                &theme.hint,
+                &theme.title,
+                &theme.border_color,
+                &theme.marker,
+            ] {
+                assert!(field.is_some(), "Incomplete packaged theme: {name}");
+            }
+            assert!(theme.border.is_some());
+            assert!(theme.selection_width.is_some());
+            theme.validate().unwrap();
+        }
+        for removed in ["ocean", "forest", "rose"] {
+            assert!(named(removed).is_err());
+        }
+    }
+
+    #[test]
+    fn namespaces_replace_whole_themes_across_formats_and_follow_renames_and_reload() {
         let dir = tempfile::tempdir().unwrap();
         for (extension, text) in [
             (
                 "toml",
-                "theme = { border = 'rounded', marker = '--x', text = '#112233' }\n[gh]\ntheme = 'ocean'\nhome = 'https://github.com'\n[gh.work]\ntheme = { selected = '#abcdef', border = 'none' }\nrepo = 'https://github.com/example'\n[qk]\ntheme = 'rose'\ndocs = 'https://example.com'",
+                "theme = { marker = '--root', background = '#112233' }\n[gh]\ntheme = 'dracula'\nhome = 'https://github.com'\n[gh.work]\ntheme = { selected = '#abcdef' }\nrepo = 'https://github.com/example'\n[qk]\ndocs = 'https://example.com'",
             ),
             (
                 "yaml",
-                "theme: {border: rounded, marker: --x, text: '#112233'}\ngh:\n  theme: ocean\n  home: https://github.com\n  work:\n    theme: {selected: '#abcdef', border: none}\n    repo: https://github.com/example\nqk:\n  theme: rose\n  docs: https://example.com",
+                "theme: {marker: --root, background: '#112233'}\ngh:\n  theme: dracula\n  home: https://github.com\n  work:\n    theme: {selected: '#abcdef'}\n    repo: https://github.com/example\nqk:\n  docs: https://example.com",
             ),
             (
                 "json",
-                r##"{"theme":{"border":"rounded","marker":"--x","text":"#112233"},"gh":{"theme":"ocean","home":"https://github.com","work":{"theme":{"selected":"#abcdef","border":"none"},"repo":"https://github.com/example"}},"qk":{"theme":"rose","docs":"https://example.com"}}"##,
+                r##"{"theme":{"marker":"--root","background":"#112233"},"gh":{"theme":"dracula","home":"https://github.com","work":{"theme":{"selected":"#abcdef"},"repo":"https://github.com/example"}},"qk":{"docs":"https://example.com"}}"##,
             ),
         ] {
             let path = dir.path().join(format!("resources.{extension}"));
             std::fs::write(&path, text).unwrap();
-            let source = import::read(&path, BTreeMap::new()).unwrap();
-            assert_eq!(source.entries.len(), 3);
             let mut state = State {
-                sources: vec![source],
+                default_theme: "nord".into(),
+                sources: vec![import::read(&path, BTreeMap::new()).unwrap()],
                 ..State::default()
             };
             assert_eq!(state.children(&[]), ["gh", "qk"]);
-            let theme = state.theme(&["gh".into(), "home".into()]);
-            assert_eq!(theme.selected.as_deref(), Some("#88c0d0"));
-            assert_eq!(theme.text.as_deref(), Some("#112233"));
-            assert_eq!(theme.border, Some(Border::Rounded));
-            assert_eq!(theme.marker(), "--x");
-            let nested = state.theme(&["gh".into(), "work".into()]);
-            assert_eq!(nested.selected.as_deref(), Some("#abcdef"));
-            assert_eq!(nested.border, Some(Border::None));
-            assert_eq!(nested.marker(), "--x");
+            assert_eq!(state.theme(&[]), named("nord").unwrap());
             assert_eq!(
-                state.theme(&["qk".into()]).selected.as_deref(),
-                Some("#eba0ac")
+                state.theme(&["gh".into(), "home".into()]),
+                named("dracula").unwrap()
             );
+            let partial = Theme {
+                selected: Some("#abcdef".into()),
+                ..Theme::default()
+            };
+            assert_eq!(
+                state.theme(&["gh".into(), "work".into(), "repo".into()]),
+                partial
+            );
+            assert_eq!(partial.marker(), ">");
+            assert_eq!(partial.border.unwrap_or_default(), Border::None);
+            assert_eq!(
+                partial.selection_width.unwrap_or_default(),
+                SelectionWidth::Row
+            );
+            assert!(
+                partial.text.is_none() && partial.background.is_none() && partial.hint.is_none()
+            );
+            assert_eq!(state.theme(&["qk".into()]).marker(), "--root");
             import::rename(&mut state.sources[0], "gh", "github").unwrap();
-            assert_eq!(state.theme(&["github".into(), "home".into()]), theme);
+            assert_eq!(state.theme(&["github".into()]), named("dracula").unwrap());
+            assert_eq!(state.theme(&["github".into(), "work".into()]), partial);
+            std::fs::write(&path, text.replace("dracula", "nord")).unwrap();
+            state.sources = import::reload(&state.sources).unwrap();
+            assert_eq!(state.theme(&["github".into()]), named("nord").unwrap());
             let saved = dir.path().join("state.yaml");
             state.save(&saved).unwrap();
-            let mut state = State::load(&saved).unwrap();
-            assert_eq!(state.theme(&["github".into()]), theme);
-            std::fs::write(&path, text.replace("ocean", "forest")).unwrap();
-            state.sources = import::reload(&state.sources).unwrap();
             assert_eq!(
-                state.theme(&["github".into()]).selected.as_deref(),
-                Some("#a3be8c")
+                State::load(&saved)
+                    .unwrap()
+                    .theme(&["github".into(), "work".into()]),
+                partial
             );
         }
     }
 
     #[test]
-    fn saved_default_is_inherited_and_namespace_settings_take_precedence() {
+    fn policy_applies_to_all_files_and_descendants_without_affecting_other_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("resources.toml");
-        std::fs::write(&path, "theme = { border = 'rounded' }\n[gh]\nhome = 'https://github.com'\n[gh.work]\ntheme = { marker = '--x' }\nrepo = 'https://github.com/example'\n[qk]\ntheme = 'rose'\ndocs = 'https://example.com'").unwrap();
-        let state = State {
-            default_theme: NamedTheme::Forest,
-            sources: vec![import::read(&path, BTreeMap::new()).unwrap()],
+        let mut state = State {
+            default_theme: "nord".into(),
             ..State::default()
         };
-        assert_eq!(state.theme(&[]).selected.as_deref(), Some("#a3be8c"));
-        let theme = state.theme(&["gh".into(), "work".into()]);
-        assert_eq!(theme.selected.as_deref(), Some("#a3be8c"));
-        assert_eq!(theme.border, Some(Border::Rounded));
-        assert_eq!(theme.marker(), "--x");
+        for (file, text) in [
+            (
+                "a.toml",
+                "[gh]\ntheme = 'dracula'\n[gh.work]\ntheme = { marker = '--x' }\nrepo = 'https://example.com'\n[qk]\ntheme = 'gruvbox-dark'\ndocs = 'https://example.com'",
+            ),
+            (
+                "b.toml",
+                "[gh]\ntheme = 'catppuccin-mocha'\nother = 'https://example.com'\n[plain]\ndocs = 'https://example.com'",
+            ),
+        ] {
+            let path = dir.path().join(file);
+            std::fs::write(&path, text).unwrap();
+            state
+                .sources
+                .push(import::read(&path, BTreeMap::new()).unwrap());
+        }
+        let global = state.global_theme();
+        assert_eq!(state.theme(&["plain".into()]), global);
+        assert_eq!(state.theme(&["gh".into()]), named("dracula").unwrap()); // First source wins a merged namespace
+        state.denied_theme_tools.insert("gh".into());
+        for path in [
+            vec!["gh"],
+            vec!["gh", "work"],
+            vec!["gh", "work", "repo"],
+            vec!["gh", "other"],
+        ] {
+            assert_eq!(
+                state.theme(&path.into_iter().map(String::from).collect::<Vec<_>>()),
+                global
+            );
+        }
+        assert_eq!(state.theme(&["qk".into()]), named("gruvbox-dark").unwrap());
+        state.tool_themes = false;
+        assert_eq!(state.theme(&["qk".into()]), global);
+        state.tool_themes = true;
+        assert_eq!(state.theme(&["gh".into(), "other".into()]), global);
+        state.denied_theme_tools.remove("gh");
         assert_eq!(
-            state.theme(&["qk".into()]).selected.as_deref(),
-            Some("#eba0ac")
+            state.theme(&["gh".into(), "other".into()]),
+            named("catppuccin-mocha").unwrap()
         );
-        let saved = dir.path().join("state.yaml");
-        state.save(&saved).unwrap();
-        assert_eq!(
-            State::load(&saved)
-                .unwrap()
-                .theme(&["gh".into(), "work".into()]),
-            theme
-        );
+        // Resource files cannot supply their own permission settings inside a theme.
+        assert!(read_file("[theme]\nname = 'bad'\ntool_themes = 'on'").is_err());
     }
 
     #[test]
-    fn invalid_settings_are_rejected_and_script_environment_is_untouched() {
+    fn invalid_theme_fields_are_rejected_and_script_environment_is_not_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("resources.toml");
         for value in [
             "'unknown'",
+            "'ocean'",
             "{selected = 'purple'}",
             "{border = 'dotted'}",
             "{unknown = 'value'}",
@@ -292,6 +398,9 @@ mod tests {
             "{selected = '#１２３'}",
             "{selected = ['#ffffff']}",
             "{marker = '12345678901234567'}",
+            "{background = 'bad'}",
+            "{selected_background = 'bad'}",
+            "{selection_width = 'bad'}",
         ] {
             std::fs::write(
                 &path,
@@ -300,7 +409,7 @@ mod tests {
             .unwrap();
             assert!(import::read(&path, BTreeMap::new()).is_err(), "{value}");
         }
-        std::fs::write(&path, "[task]\ntheme = 'ocean'\nrun = 'echo hello'\n[task.env]\ntheme = 'ordinary environment value'").unwrap();
+        std::fs::write(&path, "[task]\ntheme = 'dracula'\nrun = 'echo hello'\n[task.env]\ntheme = 'ordinary environment value'").unwrap();
         assert!(import::read(&path, BTreeMap::new()).is_ok());
         assert_eq!(color("default").unwrap(), Color::Reset);
     }

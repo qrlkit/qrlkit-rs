@@ -1,0 +1,16 @@
+# Catppuccin Latte
+# Upstream palette: https://github.com/catppuccin/palette/blob/main/palette.json
+# Mapping: base/text, accent/selection foreground and title, highlight/selection
+# background, secondary text/hints. Border shape is a qrlkit presentation choice.
+[theme]
+name = "catppuccin-latte"
+background = "#eff1f5"
+text = "#4c4f69"
+selected = "#8839ef"
+selected_background = "#ccd0da"
+hint = "#6c6f85"
+title = "#8839ef"
+border = "rounded"
+border_color = "#9ca0b0"
+marker = ">"
+selection_width = "row"

@@ -175,7 +175,14 @@ Current version is 0.10.3 but any minor version can ship with a breaking change 
 | `qrlkit set-dirhook <command>` | Choose the directory hook (`--clear` restores changing directory) |
 | `qrlkit init` | Choose browser, shell, filehook, and dirhook interactively |
 | `qrlkit init <shell>` | Print the directory wrapper for manual setup |
-| `qrlkit nuke` | Reset imports, renames, browser selection, and hooks |
+| `qrlkit nuke` | Reset imports, renames, browser selection, hooks, and theme settings |
+| `qrlkit themes` | List themes with previews |
+| `qrlkit themes current` | Show the global theme and tool policy |
+| `qrlkit themes add <file>` | Import a theme without activating it |
+| `qrlkit themes set [name]` | Set the global theme; omit name for live previews |
+| `qrlkit themes tools <on/off>` | Enable or disable tool themes |
+| `qrlkit themes tools deny <tool>` | Ignore a tool's theme |
+| `qrlkit themes tools reset <tool>` | Remove a tool's theme exclusion |
 | `qrlkit --help` | Show help |
 
 `nuke` keeps your original config files and installed shell integration.
@@ -473,6 +480,89 @@ run = 'printf "Hello, %s!\n" "$NAME"'
 [greet.env]
 NAME = "{global.name}"
 ```
+
+## Themes
+
+Make the picker fit your terminal.
+
+Available themes:
+`terminal` (default), `catppuccin-latte`, `catppuccin-mocha`, `dracula`,
+`gruvbox-dark`, `gruvbox-light`, `nord`, and `tokyo-night`.
+
+Preview the themes and choose a global default.
+
+```sh
+qrlkit themes              # List themes with previews
+qrlkit themes set          # Preview as you navigate; Enter saves, Esc cancels
+qrlkit themes set dracula  # Choose directly
+qrlkit themes current      # Show your theme and tool policy
+```
+
+Give a tool its own theme in the config.
+
+```toml
+[gh]
+theme = "dracula"
+home = "https://github.com"
+```
+
+Or choose the colors, box and selection marker yourself.
+
+```toml
+[gh]
+home = "https://github.com"
+
+[gh.theme]
+background = "#1e1e2e"
+text = "#cdd6f4"
+selected = "#ffffff"
+selected_background = "#45475a"
+hint = "#a6adc8"
+title = "#cba6f7"
+border = "rounded"         # none, plain, rounded, or double
+border_color = "#9399b2"
+marker = "--x"
+selection_width = "row"     # Or content: highlight only the marker, key and hint
+```
+
+Nested keys keep their parent's theme unless they define their own.
+A new theme replaces the whole thing. Missing values use terminal colors,
+no border, a `>` marker and full-row selection. Themes are never mixed.
+Use `"default"` for a color to restore your terminal's color.
+
+Save your own global theme in a separate file with a name inside `[theme]`.
+
+```toml
+# personal-theme.toml
+[theme]
+name = "personal"
+background = "#1e1e2e"
+text = "#cdd6f4"
+selected = "#cba6f7"
+selected_background = "#45475a"
+border = "rounded"
+```
+
+```sh
+qrlkit themes add personal-theme.toml
+qrlkit themes set personal
+```
+
+Importing saves a copy and adds it to the list.
+
+Tool themes are on by default. Turn them off to use your global theme everywhere,
+or exclude a single tool and all its nested keys.
+
+```sh
+qrlkit themes tools off      # Use your global theme everywhere
+qrlkit themes tools on       # Use tool themes where defined
+qrlkit themes tools deny gh  # Use your global theme for gh
+qrlkit themes tools reset gh # Remove gh's exclusion
+```
+
+Tools without a theme use your global default. Exclusions survive off/on toggles.
+`qrlkit nuke` resets the theme to `terminal`, enables tool themes and removes
+exclusions and imported themes.
 
 ## Contributing
 

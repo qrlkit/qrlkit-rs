@@ -50,6 +50,7 @@ enum Commands {
     /// List registered config files and their effective namespaces
     Ls,
     /// List available themes or set the default for interactive prompts
+    #[command(visible_alias = "theme")]
     Themes {
         #[command(subcommand)]
         command: Option<ThemeCommands>,
@@ -78,7 +79,7 @@ enum Commands {
         #[arg(long)]
         clear: bool,
     },
-    /// Delete saved imports, namespace renames, browser selection, and hooks
+    /// Delete saved imports, browser selection, hooks, and all theme settings
     Nuke,
     /// Run interactive setup, or print integration for an explicitly named shell
     Init { shell: Option<shell::Shell> },
@@ -97,11 +98,135 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ThemeCommands {
-    /// Save the default theme; namespace themes take precedence
-    Set {
-        #[arg(value_enum)]
-        option: theme::NamedTheme,
+    /// Show the selected global theme and tool policy
+    Current,
+    /// Import a named [theme] from a TOML file without activating it
+    Add { path: PathBuf },
+    /// Set the global theme, or browse live previews when no name is given
+    Set { option: Option<String> },
+    /// Enable tool themes or exclude individual top-level namespaces
+    Tools {
+        #[command(subcommand)]
+        command: ToolThemeCommands,
     },
+}
+
+#[derive(Subcommand)]
+enum ToolThemeCommands {
+    /// Enable tool themes, preserving per-tool exclusions
+    On,
+    /// Use the global theme everywhere, preserving exclusions
+    Off,
+    /// Exclude a top-level namespace and all its descendants
+    Deny { tool: String },
+    /// Remove a namespace exclusion and follow the global policy
+    Reset { tool: String },
+}
+
+fn theme_command(
+    state: &mut State,
+    path: &std::path::Path,
+    command: Option<ThemeCommands>,
+) -> Result<()> {
+    match command {
+        None => {
+            println!("Available themes:");
+            let mut catalog = state.catalog();
+            let terminal = catalog.remove_entry("terminal");
+            for (name, theme) in terminal.into_iter().chain(catalog) {
+                println!(
+                    "  {name}{}",
+                    if name == state.default_theme {
+                        " (default)"
+                    } else {
+                        ""
+                    }
+                );
+                ui::print_theme_preview(&theme)?;
+            }
+        }
+        Some(ThemeCommands::Current) => {
+            println!("Global theme: {}", state.default_theme);
+            println!(
+                "Tool themes: {}",
+                if state.tool_themes { "on" } else { "off" }
+            );
+            println!(
+                "Denied tools: {}",
+                if state.denied_theme_tools.is_empty() {
+                    "none".into()
+                } else {
+                    state
+                        .denied_theme_tools
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            );
+        }
+        Some(ThemeCommands::Add { path: source }) => {
+            let text = std::fs::read_to_string(&source)
+                .with_context(|| format!("Cannot read {}", source.display()))?;
+            let (name, theme) = theme::read_file(&text)
+                .with_context(|| format!("Invalid theme in {}", source.display()))?;
+            ensure!(
+                !state.catalog().contains_key(&name),
+                "Theme already exists: {name}"
+            );
+            state.custom_themes.insert(name.clone(), theme);
+            state.save(path)?;
+            println!("Imported theme {name}");
+        }
+        Some(ThemeCommands::Set { option }) => {
+            let catalog = state.catalog();
+            let name = match option {
+                Some(name) => name,
+                None => {
+                    let names = catalog.keys().cloned().collect::<Vec<_>>();
+                    let themes = catalog.values().cloned().collect::<Vec<_>>();
+                    let selected = names
+                        .iter()
+                        .position(|name| name == &state.default_theme)
+                        .unwrap_or(0);
+                    let Some(choice) = ui::select_theme(&names, themes, selected)? else {
+                        return Ok(());
+                    };
+                    names[choice].clone()
+                }
+            };
+            ensure!(
+                catalog.contains_key(&name),
+                "Unknown theme: {name}; run qrlkit themes to list available themes"
+            );
+            state.default_theme = name.clone();
+            state.save(path)?;
+            println!("Default theme set to {name}");
+        }
+        Some(ThemeCommands::Tools { command }) => {
+            match command {
+                ToolThemeCommands::On => state.tool_themes = true,
+                ToolThemeCommands::Off => state.tool_themes = false,
+                ToolThemeCommands::Deny { tool } => {
+                    ensure!(
+                        import::valid_segment(&tool),
+                        "Invalid tool namespace: {tool}"
+                    );
+                    state.denied_theme_tools.insert(tool);
+                }
+                ToolThemeCommands::Reset { tool } => {
+                    ensure!(
+                        import::valid_segment(&tool),
+                        "Invalid tool namespace: {tool}"
+                    );
+                    state.denied_theme_tools.remove(&tool);
+                }
+            }
+            state.save(path)?;
+            println!("Tool theme policy saved");
+        }
+    }
+    Ok(())
 }
 
 fn resolve(sources: &mut [store::Source], strategy: store::CollisionStrategy) -> Result<()> {
@@ -215,31 +340,10 @@ fn run() -> Result<i32> {
     }
     let mut state = State::load(&path)?;
     if let Commands::Themes { command } = command {
-        match command {
-            Some(ThemeCommands::Set { option }) => {
-                state.default_theme = option;
-                state.save(&path)?;
-                println!("Default theme set to {}", option.name());
-            }
-            None => {
-                println!("Available themes:");
-                for theme in theme::NamedTheme::ALL {
-                    println!(
-                        "  {:<10} {}{}",
-                        theme.name(),
-                        theme.description(),
-                        if theme == state.default_theme {
-                            " (default)"
-                        } else {
-                            ""
-                        }
-                    );
-                }
-            }
-        }
+        theme_command(&mut state, &path, command)?;
         return Ok(0);
     }
-    ui::set_theme(state.default_theme.theme());
+    ui::set_theme(state.global_theme());
     if let Commands::Init { shell: None } = command {
         setup::interactive(&mut state, &path)?;
         return Ok(0);

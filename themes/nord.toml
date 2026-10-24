@@ -1,0 +1,16 @@
+# Nord
+# Upstream palette: https://github.com/nordtheme/nord/blob/develop/src/nord.css
+# Mapping: base/text, accent/selection foreground and title, highlight/selection
+# background, secondary text/hints. Border shape is a qrlkit presentation choice.
+[theme]
+name = "nord"
+background = "#2e3440"
+text = "#d8dee9"
+selected = "#88c0d0"
+selected_background = "#434c5e"
+hint = "#d8dee9"
+title = "#88c0d0"
+border = "rounded"
+border_color = "#81a1c1"
+marker = ">"
+selection_width = "row"

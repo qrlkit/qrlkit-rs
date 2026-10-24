@@ -1,0 +1,16 @@
+# Terminal defaults
+# Upstream palette: Terminal colors; no external palette.
+# Mapping: base/text, accent/selection foreground and title, highlight/selection
+# background, secondary text/hints. Border shape is a qrlkit presentation choice.
+[theme]
+name = "terminal"
+background = "default"
+text = "default"
+selected = "default"
+selected_background = "default"
+hint = "default"
+title = "default"
+border = "none"
+border_color = "default"
+marker = ">"
+selection_width = "row"

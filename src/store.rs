@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -65,8 +65,14 @@ pub enum CollisionStrategy {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct State {
     pub version: u32,
-    #[serde(default)]
-    pub default_theme: crate::theme::NamedTheme,
+    #[serde(default = "default_theme_name")]
+    pub default_theme: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub custom_themes: BTreeMap<String, crate::theme::Theme>,
+    #[serde(default = "tool_themes_enabled")]
+    pub tool_themes: bool,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub denied_theme_tools: BTreeSet<String>,
     #[serde(default)]
     pub collision_strategy: CollisionStrategy,
     pub browser: Option<Browser>,
@@ -79,11 +85,21 @@ pub struct State {
     pub sources: Vec<Source>,
 }
 
+fn default_theme_name() -> String {
+    "terminal".into()
+}
+fn tool_themes_enabled() -> bool {
+    true
+}
+
 impl Default for State {
     fn default() -> Self {
         Self {
             version: 1,
-            default_theme: crate::theme::NamedTheme::default(),
+            default_theme: default_theme_name(),
+            custom_themes: BTreeMap::new(),
+            tool_themes: true,
+            denied_theme_tools: BTreeSet::new(),
             collision_strategy: CollisionStrategy::default(),
             browser: None,
             shell: None,
@@ -114,6 +130,25 @@ impl State {
     }
 
     fn validate(&self) -> Result<()> {
+        for (name, theme) in &self.custom_themes {
+            crate::theme::valid_name(name)?;
+            ensure!(
+                !crate::theme::packaged().contains_key(name),
+                "Custom theme conflicts with packaged theme: {name}"
+            );
+            theme.validate()?;
+        }
+        ensure!(
+            self.catalog().contains_key(&self.default_theme),
+            "Unknown global theme: {}",
+            self.default_theme
+        );
+        for tool in &self.denied_theme_tools {
+            ensure!(
+                crate::import::valid_segment(tool),
+                "Invalid tool namespace: {tool}"
+            );
+        }
         if let Some(hook) = &self.filehook {
             crate::filehook::validate(hook)?;
         }
@@ -235,10 +270,26 @@ impl State {
         Ok(())
     }
 
-    /// The first registered source containing this path supplies its theme.
-    /// This also makes merged namespaces deterministic.
+    pub fn catalog(&self) -> BTreeMap<String, crate::theme::Theme> {
+        crate::theme::catalog(&self.custom_themes)
+    }
+
+    pub fn global_theme(&self) -> crate::theme::Theme {
+        // State loading validates the selected name; fresh state uses terminal.
+        self.catalog()
+            .remove(&self.default_theme)
+            .unwrap_or_default()
+    }
+
+    /// Select one complete theme, never a mix of fields from different themes.
+    /// The first source containing a merged namespace supplies its tool theme.
     pub fn theme(&self, key: &[String]) -> crate::theme::Theme {
-        let mut theme = self.default_theme.theme();
+        let Some(tool) = key.first() else {
+            return self.global_theme();
+        };
+        if !self.tool_themes || self.denied_theme_tools.contains(tool) {
+            return self.global_theme();
+        }
         if let Some(source) = self.sources.iter().find(|source| {
             source
                 .entries
@@ -246,13 +297,13 @@ impl State {
                 .any(|entry| entry.key.starts_with(key))
         }) {
             let original = crate::import::map_key(key, &source.renames, true);
-            for end in 0..=original.len() {
+            for end in (0..=original.len()).rev() {
                 if let Some(settings) = source.themes.get(&original[..end].join(" ")) {
-                    theme.overlay(settings);
+                    return settings.clone();
                 }
             }
         }
-        theme
+        self.global_theme()
     }
 
     /// Sorted, distinct immediate children of a path (not a fuzzy key search).
