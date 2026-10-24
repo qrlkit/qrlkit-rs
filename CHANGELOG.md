@@ -1,3 +1,6 @@
+## 0.11.0
+- Add support for themes
+
 ### 0.10.3
 - Bump dependencies
 
