@@ -1,5 +1,6 @@
 {
-  "constants": {
+  "shared": {
+    "hidden": true,
     "root": "/home/bob/work",
     "release_types": [
       "major",
@@ -18,7 +19,7 @@
       "url": "./",
       "hint": "Opens repo"
     },
-    "project": "{constants.root}/project",
+    "project": "{shared.root}/project",
     "readme": "./README.md"
   },
   "scripts": {
@@ -36,7 +37,7 @@
         {
           "name": "type",
           "enum": {
-            "ref": "constants.release_types"
+            "ref": "shared.release_types"
           }
         },
         {
@@ -53,7 +54,7 @@
       "run": "printf 'Release: %s\\nNote: %s\\nRegion: %s\\nProject: %s\\n' \"$1\" \"$2\" \"$3\" \"$PROJECT_ROOT\"\n",
       "shell": "bash",
       "env": {
-        "PROJECT_ROOT": "{constants.root}/project"
+        "PROJECT_ROOT": "{shared.root}/project"
       }
     }
   }

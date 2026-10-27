@@ -1,7 +1,8 @@
 # qrlkit add examples/syntax.yaml
 
-# Reusable values local to this file
-constants:
+# Reusable values, also available to other registered configs
+shared:
+  hidden: true
   root: /home/bob/work
   release_types: [major, minor, patch]
 
@@ -14,7 +15,7 @@ paths:
   # Hints can also go after the value.
   repo: ./ # hint: Opens repo
   # Absolute path
-  project: "{constants.root}/project"
+  project: "{shared.root}/project"
   readme: ./README.md
 scripts:
   # qrlkit scripts greet "friend"
@@ -32,7 +33,7 @@ scripts:
     args:
       - name: type
         enum:
-          ref: constants.release_types
+          ref: shared.release_types
       - name: note
       - name: region
         enum: [eu, us]
@@ -40,4 +41,4 @@ scripts:
       printf 'Release: %s\nNote: %s\nRegion: %s\nProject: %s\n' "$1" "$2" "$3" "$PROJECT_ROOT"
     shell: bash
     env:
-      PROJECT_ROOT: "{constants.root}/project"
+      PROJECT_ROOT: "{shared.root}/project"

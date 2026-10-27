@@ -185,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix="qrl-collision-test-") as directory:
     assert run("third-qk", "git", "other") == "third"
     state = (root / "state.yaml").read_text()
     assert "\ncollision_strategy: merge\n" in state
-    assert "- collision_strategy: rename\n" in state
+    assert "  collision_strategy: rename\n" in state
 
 
 for extension, hint_style in (
@@ -230,12 +230,13 @@ with tempfile.TemporaryDirectory(prefix="qrl-enum-test-") as directory:
     root = Path(directory)
     source = root / "tasks.toml"
     source.write_text('''
-[constants]
+[shared]
+hidden = true
 environments = ["dev", "staging", "prod"]
 [deploy]
 run = 'printf "%s/%s" "$1" "$2" > selected'
 args = [
-    { name = "environment", enum = { ref = "constants.environments" } },
+    { name = "environment", enum = { ref = "shared.environments" } },
     { name = "region", enum = ["eu", "us"] },
 ]
 ''')
@@ -512,3 +513,74 @@ selection_width = "content"
     source.write_text(original)
 
 print("Themes: packaged previews, no mixing, global/tool policy, live selection, cancellation, custom imports, and narrow terminals passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-composition-test-") as directory:
+    root = Path(directory)
+    source = root / "tools.toml"
+    source.write_text('''
+[projects]
+hidden = true
+[projects.repos]
+hint = "Choose a project"
+values = [
+  { value = "qrlkit-rs", hint = "Rust CLI" },
+  { value = "qrlkit-web", hint = "Website" },
+]
+[shared]
+hidden = true
+[shared.environments]
+hint = "Choose an environment"
+values = ["sim", "live"]
+[system]
+hidden = true
+[system.hostname]
+run = 'printf host; printf x >> captured'
+[logs]
+hint = "Search application logs"
+url = "https://{logs.subdomains[projects.repos,shared.environments]}.example.com/?repo={projects.repos}&host={system.hostname}&again={system.hostname}"
+[logs.subdomains]
+hidden = true
+[logs.subdomains.qrlkit-rs]
+sim = "rust-sandbox"
+live = "rust-production"
+[logs.subdomains.qrlkit-web]
+sim = "web-sandbox"
+live = "web-production"
+[repos]
+hint = "GitHub resources"
+[repos.open]
+hint = "Browse the repository"
+url = "https://github.com/qrlkit/{projects.repos}"
+[repos.prs]
+hint = "Browse pull requests"
+url = "{repos.open}/pulls"
+''')
+    (root / "state.yaml").write_text(json.dumps({
+        "version": 1,
+        "browser": {"name": "Test", "executable": "/bin/echo"},
+        "sources": [],
+    }))
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run([str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)], env=env, capture_output=True, check=True)
+    transcript = run_interactive(root, [
+        ("logs        Search application logs", b"\r"),
+        ("qrlkit-web        Website", b"\x1b[B\r"),
+        ("Choose an environment", b"\x1b[B\r"),
+    ], command=(), verify_terminal=True)
+    visible = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", transcript)
+    for hidden in (b"projects", b"shared", b"system", b"subdomains"):
+        assert hidden not in visible, transcript
+    expected = b"https://web-production.example.com/?repo=qrlkit-web&host=host&again=host"
+    assert b"qrlkit: open " + expected in visible, transcript
+    assert (root / "captured").read_text() == "x"
+    (root / "captured").unlink()
+    run_interactive(root, [("Choose a project", b"\x1b")], success=False, command=("logs",), verify_terminal=True)
+    assert not (root / "captured").exists()
+    run_interactive(root, [("Choose an environment", b"\x1b")], success=False, command=("logs", "qrlkit-rs"), verify_terminal=True)
+    assert not (root / "captured").exists()
+    run_interactive(root, [("qrlkit-web        Website", b"\x1b[B\r")], command=("repos", "prs"), verify_terminal=True)
+    # Hidden data remains explicitly callable, including list hints.
+    transcript = run_interactive(root, [("qrlkit-rs        Rust CLI", b"\r")], command=("projects", "repos"), verify_terminal=True)
+    assert b"qrlkit-rs" in transcript
+
+print("Composition: hidden groups, group/choice hints, multi-selector prompts, shared selections, script caching, resource composition, and cancellation passed")

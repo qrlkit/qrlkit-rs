@@ -1,0 +1,78 @@
+# A complete composed toolbox. The logs and metrics domains are illustrative.
+# Import with: qrlkit add examples/composition.toml
+
+[projects]
+hidden = true
+org = "qrlkit"
+
+[projects.repos]
+hint = "Choose a qrlkit project"
+values = [
+  { value = "qrlkit-rs", hint = "Rust CLI" },
+  { value = "qrlkit-web", hint = "Documentation website" },
+]
+
+[projects.subsystems]
+hint = "Choose a subsystem"
+values = ["api", "worker"]
+
+[shared]
+hidden = true
+dev_root = "~/dev"
+regions = ["eu", "us"]
+
+[shared.environments]
+hint = "Choose an environment"
+values = ["sim", "live"]
+
+[system]
+hidden = true
+
+[system.hostname]
+hint = "Current machine hostname"
+run = "hostname"
+
+# logs qrlkit-rs api live eu
+[logs]
+hint = "Search application logs"
+url = "https://{logs.subdomains[projects.repos, projects.subsystems]}.{logs.clusters[shared.environments]}.{shared.regions}.logs.example.com/search?service={projects.repos}&host={system.hostname}"
+
+[logs.subdomains]
+hidden = true
+
+[logs.subdomains.qrlkit-rs]
+api = "rust-api"
+worker = "rust-worker"
+
+[logs.subdomains.qrlkit-web]
+api = "web-api"
+worker = "web-worker"
+
+[logs.clusters]
+hidden = true
+sim = "sandbox"
+live = "production"
+
+# metrics qrlkit-web sim us
+[metrics]
+hint = "Browse application metrics"
+url = "https://metrics.example.com/{projects.repos}/{shared.environments}/{shared.regions}"
+
+[repos]
+hint = "GitHub resources"
+
+[repos.open]
+hint = "Browse the repository"
+url = "https://github.com/{projects.org}/{projects.repos}"
+
+[repos.prs]
+hint = "Browse pull requests"
+url = "{repos.open}/pulls"
+
+[repos.issues]
+hint = "Browse issues"
+url = "{repos.open}/issues"
+
+[workspace]
+hint = "Enter the local repository"
+url = "{shared.dev_root}/{projects.repos}"

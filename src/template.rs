@@ -1,6 +1,65 @@
 use anyhow::{Result, ensure};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Expression {
+    Path(Vec<String>),
+    Lookup(Box<Expression>, Vec<Expression>),
+}
+
+pub fn valid_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+pub fn expression(text: &str) -> Result<Expression> {
+    fn parse(text: &str, depth: usize) -> Result<Expression> {
+        ensure!(depth < 64, "Reference nesting exceeds 64 levels");
+        let text = text.trim();
+        let (path, suffix) = text.split_once('[').map_or((text, ""), |(a, b)| (a, b));
+        let segments: Vec<String> = path.trim().split('.').map(str::to_owned).collect();
+        ensure!(
+            segments.iter().all(|part| !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))),
+            "Invalid reference: {text}"
+        );
+        let base = Expression::Path(segments);
+        if suffix.is_empty() {
+            ensure!(!text.contains(['[', ']']), "Malformed lookup: {text}");
+            return Ok(base);
+        }
+        ensure!(suffix.ends_with(']'), "Unclosed lookup: {text}");
+        let inner = &suffix[..suffix.len() - 1];
+        let mut selectors = Vec::new();
+        let mut nesting = 0usize;
+        let mut start = 0;
+        for (index, ch) in inner.char_indices() {
+            match ch {
+                '[' => nesting += 1,
+                ']' => {
+                    ensure!(nesting > 0, "Unexpected closing bracket: {text}");
+                    nesting -= 1;
+                }
+                ',' if nesting == 0 => {
+                    selectors.push(parse(&inner[start..index], depth + 1)?);
+                    start = index + 1;
+                }
+                _ => {}
+            }
+        }
+        ensure!(nesting == 0, "Unclosed lookup: {text}");
+        selectors.push(parse(&inner[start..], depth + 1)?);
+        Ok(Expression::Lookup(Box::new(base), selectors))
+    }
+    parse(text, 0)
+}
+
 pub fn names(template: &str) -> Result<Vec<String>> {
+    ensure!(!template.contains('\0'), "Values cannot contain NUL");
     let mut names = vec![];
     let mut rest = template;
     while let Some(start) = rest.find(['{', '}']) {
@@ -14,10 +73,7 @@ pub fn names(template: &str) -> Result<Vec<String>> {
             + start
             + 1;
         let name = &rest[start + 1..end];
-        ensure!(
-            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-            "Placeholder names must contain letters, digits or underscores"
-        );
+        expression(name)?;
         if !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
         }
@@ -26,88 +82,34 @@ pub fn names(template: &str) -> Result<Vec<String>> {
     Ok(names)
 }
 
-pub fn expand(
-    template: &str,
-    args: &[String],
-    mut prompt: impl FnMut(&str) -> Result<String>,
-) -> Result<String> {
-    let names = names(template)?;
+/// Validate static target syntax without evaluating references or requiring paths to exist.
+pub fn validate_target(target: &str) -> Result<()> {
+    names(target)?;
     ensure!(
-        args.len() <= names.len(),
-        "Expected {} argument(s), got {}",
-        names.len(),
-        args.len()
+        !target.contains(['\n', '\r', '\0']),
+        "Targets cannot contain newlines or NUL"
     );
-    let mut values = args.to_vec();
-    for name in names.iter().skip(values.len()) {
-        values.push(prompt(name)?);
+    if target.starts_with('{') {
+        return Ok(());
     }
-    let url = crate::resource::is_url(template);
-    let mut result = String::new();
-    let mut rest = template;
+    let mut static_target = String::new();
+    let mut rest = target;
     while let Some(start) = rest.find('{') {
         let end = rest[start..].find('}').unwrap() + start;
-        result.push_str(&rest[..start]);
-        let index = names
-            .iter()
-            .position(|n| n == &rest[start + 1..end])
-            .unwrap();
-        let value = &values[index];
-        if url {
-            for byte in value.bytes() {
-                if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-                    result.push(char::from(byte));
-                } else {
-                    use std::fmt::Write;
-                    write!(result, "%{byte:02X}")?;
-                }
-            }
-        } else {
-            result.push_str(value);
-        }
+        static_target.push_str(&rest[..start]);
+        static_target.push_str("placeholder");
         rest = &rest[end + 1..];
     }
-    result.push_str(rest);
-    Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn ordering_reuse_encoding_and_literal_substitution() {
-        let result = expand(
-            "https://example.com/{env}/{id}?again={id}",
-            &["prod".into(), "a /?&ø".into()],
-            |_| panic!(),
-        )
-        .unwrap();
-        assert_eq!(
-            result,
-            "https://example.com/prod/a%20%2F%3F%26%C3%B8?again=a%20%2F%3F%26%C3%B8"
-        );
-        assert_eq!(
-            expand("./{one}/{two}", &["{two}".into()], |name| {
-                assert_eq!(name, "two");
-                Ok("literal $HOME".into())
-            })
-            .unwrap(),
-            "./{two}/literal $HOME"
-        );
-    }
-    #[test]
-    fn malformed_extra_and_missing_arguments() {
-        for bad in ["./{", "./}", "./{}", "./{bad name}", "./{{nested}}"] {
-            assert!(names(bad).is_err());
-        }
-        assert!(expand("./fixed", &["extra".into()], |_| panic!()).is_err());
-        assert!(expand("./{missing}", &[], |_| anyhow::bail!("cancelled")).is_err());
-    }
+    static_target.push_str(rest);
+    crate::resource::validate(&static_target)
 }
 
 /// Declarations cover each distinct placeholder; their order controls CLI arguments.
 pub fn validate_arguments(template: &str, args: Option<&[crate::script::Argument]>) -> Result<()> {
-    let names = names(template)?;
+    let names = names(template)?
+        .into_iter()
+        .filter(|name| valid_name(name))
+        .collect::<Vec<_>>();
     crate::script::validate_arguments(args)?;
     if let Some(args) = args {
         ensure!(
@@ -118,78 +120,50 @@ pub fn validate_arguments(template: &str, args: Option<&[crate::script::Argument
     Ok(())
 }
 
-pub fn expand_arguments(
-    template: &str,
-    args: Option<&[crate::script::Argument]>,
-    supplied: &[String],
-    mut prompt: impl FnMut(&crate::script::Argument) -> Result<String>,
-) -> Result<String> {
-    validate_arguments(template, args)?;
-    let Some(args) = args else {
-        return expand(template, supplied, |name| {
-            prompt(&crate::script::Argument {
-                name: name.to_owned(),
-                choices: None,
-            })
-        });
-    };
-    let values = crate::script::resolve_arguments(Some(args), supplied, prompt)?;
-    let ordered = names(template)?
-        .iter()
-        .map(|name| values[args.iter().position(|arg| &arg.name == name).unwrap()].clone())
-        .collect::<Vec<_>>();
-    expand(template, &ordered, |_| unreachable!())
-}
-
 #[cfg(test)]
-mod argument_tests {
+mod tests {
     use super::*;
-    use crate::script::Argument;
 
     #[test]
-    fn names_map_values_and_repeated_url_placeholders_encode_once() {
-        let args = [
-            Argument {
-                name: "query".into(),
-                choices: None,
-            },
-            Argument {
-                name: "repo".into(),
-                choices: Some(vec!["a /?&ø".into()]),
-            },
-        ];
-        let result = expand_arguments(
-            "https://example.com/{repo}?q={query}&again={repo}",
-            Some(&args),
-            &["hello world".into()],
-            |arg| {
-                assert_eq!(arg.name, "repo");
-                Ok(arg.choices.as_ref().unwrap()[0].clone())
-            },
-        )
-        .unwrap();
+    fn references_support_qualified_paths_nested_and_multiple_selectors() {
+        for name in [
+            "projects.org",
+            "projects.qrlkit-rs",
+            "logs.hosts[projects.repos, shared.environments, shared.regions]",
+            "logs.hosts[projects.aliases[projects.repos], shared.regions]",
+        ] {
+            expression(name).unwrap();
+        }
         assert_eq!(
-            result,
-            "https://example.com/a%20%2F%3F%26%C3%B8?q=hello%20world&again=a%20%2F%3F%26%C3%B8"
+            names("{data.names}/{data.names}/{other}").unwrap(),
+            ["data.names", "other"]
         );
-        assert!(
-            expand_arguments(
-                "./{repo}/{query}",
-                Some(&args),
-                &["x".into(), "bad".into()],
-                |_| panic!("invalid supplied values must not prompt")
-            )
-            .is_err()
-        );
-        assert!(
-            expand_arguments("./{repo}/{query}", Some(&args), &["x".into()], |_| Ok(
-                "bad".into()
-            ))
-            .is_err()
-        );
-        assert_eq!(
-            expand_arguments("./fixed", Some(&[]), &[], |_| panic!()).unwrap(),
-            "./fixed"
-        );
+    }
+
+    #[test]
+    fn malformed_expressions_and_templates_are_errors() {
+        for bad in [
+            "./{",
+            "./}",
+            "./{}",
+            "./{bad name}",
+            "./{{nested}}",
+            "{a[]}",
+            "{a[b,]}",
+            "{a[b][c]}",
+            "{a..b}",
+            "{a()}",
+        ] {
+            assert!(names(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn static_target_validation_defers_composed_values_but_rejects_invalid_schemes() {
+        validate_target("{repos.open}/pulls").unwrap();
+        validate_target("https://{logs.hosts[projects.repos, shared.regions]}.example.com")
+            .unwrap();
+        assert!(validate_target("javascript:alert(1)").is_err());
+        assert!(validate_target("https://example.com/\n").is_err());
     }
 }

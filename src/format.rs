@@ -6,7 +6,9 @@ use serde::{
 };
 use std::{collections::BTreeMap, fmt, path::Path};
 
+#[derive(Clone, Debug)]
 pub enum Node {
+    Bool(bool),
     String(String),
     Table(BTreeMap<String, Node>),
     Array(Vec<Node>),
@@ -22,7 +24,8 @@ impl Node {
 }
 
 // Deserialize directly rather than through generic values, which can silently
-// discard duplicate keys. All formats enforce the same string/object/array schema.
+// discard duplicate keys. Booleans are retained for metadata; the importer
+// enforces where they can appear.
 impl<'de> Deserialize<'de> for Node {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct ResourceVisitor;
@@ -30,6 +33,9 @@ impl<'de> Deserialize<'de> for Node {
             type Value = Node;
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 f.write_str("a string, object, or array")
+            }
+            fn visit_bool<E: de::Error>(self, value: bool) -> Result<Node, E> {
+                Ok(Node::Bool(value))
             }
             fn visit_str<E: de::Error>(self, value: &str) -> Result<Node, E> {
                 Ok(Node::String(value.into()))
@@ -118,6 +124,9 @@ pub fn toml_hints(text: &str) -> Result<BTreeMap<Vec<String>, String>> {
                 type Value = Keys;
                 fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                     f.write_str("a resource string or table")
+                }
+                fn visit_bool<E: de::Error>(self, _: bool) -> Result<Keys, E> {
+                    Ok(Keys(vec![]))
                 }
                 fn visit_str<E: de::Error>(self, _: &str) -> Result<Keys, E> {
                     Ok(Keys(vec![]))
@@ -330,14 +339,12 @@ task:
     #[test]
     fn rejects_invalid_shapes_duplicates_and_trailing_documents() {
         for (ext, text) in [
-            ("json", "{\"x\":true}"),
             ("json", "{\"x\":null}"),
             ("json", "[]"),
             ("json", "\"https://example.com\""),
             ("json", "{\"x\":\"a\",\"x\":\"b\"}"),
             ("json", "{} {}"),
             ("json", "{broken"),
-            ("yaml", "x: true"),
             ("yaml", "x: 42"),
             ("yaml", "x: null"),
             ("yaml", "[]"),

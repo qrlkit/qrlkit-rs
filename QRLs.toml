@@ -1,11 +1,12 @@
 
-[constants]
+[shared]
+hidden = true
 release_types = ["major", "minor", "patch"]
 
 # Use qk prep-release patch "Bump deps"
 [qk.prep-release]
 args = [
-  { name = "type", enum = { ref = "constants.release_types" } },
+  { name = "type", enum = { ref = "shared.release_types" } },
   { name = "note" },
 ]
 run = """

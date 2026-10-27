@@ -195,7 +195,7 @@ fn lookup_distinguishes_unknown_partial_and_unlaunchable_paths() {
         (vec!["gh", "prs"], "interactive terminal"),
         (vec!["prs"], "No resource"),
         (vec!["gh", "prs", "repo"], "Cannot launch"),
-        (vec!["gh", "prs", "repo", "extra"], "No resource"),
+        (vec!["gh", "prs", "repo", "extra"], "Expected 0 argument"),
     ] {
         let result = run(&config, &args);
         assert!(!result.status.success());
@@ -419,8 +419,6 @@ fn invalid_script_definitions_leave_state_unchanged() {
         "[task]\nshell = 'bash'",
         "[task]\nrun = 'echo hi'\nshell = 42",
         "[task]\nrun = 'echo hi'\nshell = 'unknown'",
-        "[task]\nrun = 'echo hi'\nchild = 'https://example.com'",
-        "[task]\nrun = 'echo hi'\n[task.child]\nurl = 'https://example.com'",
         "run = 'echo hi'",
     ] {
         fs::write(&source, text).unwrap();

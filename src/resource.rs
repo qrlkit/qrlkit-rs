@@ -151,15 +151,6 @@ mod tests {
         ] {
             assert!(validate(value).is_err(), "{value}");
         }
-        assert_eq!(
-            crate::template::expand(
-                "chrome://extensions/?id={id}",
-                &["a &b".into()],
-                |_| panic!()
-            )
-            .unwrap(),
-            "chrome://extensions/?id=a%20%26b"
-        );
     }
 
     #[test]

@@ -1,11 +1,11 @@
 mod alias;
 mod browser;
-mod constants;
 mod dirhook;
 mod filehook;
 mod format;
 mod hook;
 mod import;
+mod resolve;
 mod resource;
 mod script;
 mod setup;
@@ -256,7 +256,13 @@ fn resolve(sources: &mut [store::Source], strategy: store::CollisionStrategy) ->
 /// Walk immediate children, keeping full-path lookup as the fast path.
 fn browse(state: &State, mut key: Vec<String>) -> Result<Option<store::Entry>> {
     loop {
-        let children = state.children(&key);
+        if !key.is_empty()
+            && let Ok(entry) = state.lookup(&key)
+        {
+            ui::set_theme(state.theme(&key));
+            return Ok(Some(entry.clone()));
+        }
+        let children = state.visible_children(&key);
         if children.is_empty() && !key.is_empty() {
             ui::set_theme(state.theme(&key));
             return Ok(Some(state.lookup(&key)?.clone()));
@@ -272,10 +278,7 @@ fn browse(state: &State, mut key: Vec<String>) -> Result<Option<store::Entry>> {
             .map(|child| {
                 let mut full_key = key.clone();
                 full_key.push(child.clone());
-                let hint = state
-                    .lookup(&full_key)
-                    .ok()
-                    .and_then(|entry| entry.hint.as_deref());
+                let hint = state.hint(&full_key);
                 ui::key_label(child, hint)
             })
             .collect::<Vec<_>>();
@@ -364,8 +367,10 @@ fn run() -> Result<i32> {
     ) && !state.sources.is_empty()
     {
         let before = serde_yaml_ng::to_string(&state)?;
-        state.sources = import::reload_with_constants(&state.sources, &constants::load(&path)?)?;
+        state.sources = import::reload(&state.sources)?;
         resolve(&mut state.sources, state.collision_strategy)?;
+        resolve::validate(&state)?;
+        state.version = 2;
         if serde_yaml_ng::to_string(&state)? != before {
             state.save(&path)?;
             setup::for_aliases(&state, &path)?;
@@ -394,21 +399,25 @@ fn run() -> Result<i32> {
                 for entry in &mut source.entries {
                     entry.key = import::map_key(&entry.key, &source.renames, true);
                 }
-                source.renames.clear();
+                for group in &mut source.groups {
+                    group.key = import::map_key(&group.key, &source.renames, true);
+                }
             }
             &scoped
         } else {
             &state
         };
-        let resource_prefix = (1..=key.len()).find(|&length| {
-            lookup_state.lookup(&key[..length]).is_ok_and(|entry| {
-                entry.script.is_some()
-                    || template::names(&entry.url).is_ok_and(|names| !names.is_empty())
-            })
-        });
-        let (key, mut arguments) = match resource_prefix {
-            Some(length) => (key[..length].to_vec(), key[length..].to_vec()),
-            None => (key, vec![]),
+        // Prefer an explicit child command. `--` forces subsequent tokens to be
+        // positional values when a child name and a choice happen to collide.
+        let mut length = 0;
+        while length < key.len() && key[length] != "--" && lookup_state.contains(&key[..length + 1])
+        {
+            length += 1;
+        }
+        let (key, mut arguments) = if length > 0 && lookup_state.lookup(&key[..length]).is_ok() {
+            (key[..length].to_vec(), key[length..].to_vec())
+        } else {
+            (key, vec![])
         };
         if arguments.first().is_some_and(|arg| arg == "--") {
             arguments.remove(0);
@@ -416,17 +425,36 @@ fn run() -> Result<i32> {
         let Some(entry) = browse(lookup_state, key)? else {
             return Ok(0);
         };
-        if let Some(script) = entry.script {
-            let arguments = script.resolve_arguments(&arguments, prompt_argument)?;
+        // Scoped aliases restrict navigation, while dependencies may refer to
+        // any registered source. Map their original command key back to state.
+        let evaluation_entry = if cli.source.is_some() && cli.root.is_none() {
+            let source = &lookup_state.sources[0];
+            let key = import::map_key(&entry.key, &source.renames, false);
+            state
+                .sources
+                .iter()
+                .find(|candidate| candidate.path == source.path)
+                .and_then(|candidate| {
+                    candidate
+                        .entries
+                        .iter()
+                        .find(|candidate| candidate.key == key)
+                })
+                .unwrap_or(&entry)
+        } else {
+            state.lookup(&entry.key)?
+        };
+        let evaluation = resolve::evaluate(&state, evaluation_entry, &arguments, prompt_argument)?;
+        if let Some(script) = evaluation.script {
             eprintln!("qrlkit: running script..");
-            return script.run(&arguments);
+            return script.run(&evaluation.arguments);
         }
-        let value = template::expand_arguments(
-            &entry.url,
-            entry.args.as_deref(),
-            &arguments,
-            prompt_argument,
-        )?;
+        let value = evaluation.value;
+        if entry.is_data() {
+            println!("{value}");
+            return Ok(0);
+        }
+        let value = resource::normalize(&value)?;
         match resource::resolve(&value)? {
             resource::Resource::Url(url) => {
                 let override_browser = entry
@@ -479,7 +507,6 @@ fn run() -> Result<i32> {
             path: source_path,
             collision_strategy,
         } => {
-            let global = constants::load(&path)?;
             let directory = source_path.is_dir();
             let mut registered: std::collections::BTreeSet<_> =
                 state.sources.iter().map(|s| s.path.clone()).collect();
@@ -490,8 +517,7 @@ fn run() -> Result<i32> {
                     ensure!(directory, "File already imported; use qrlkit reload");
                     continue;
                 }
-                let mut source =
-                    import::read_with_constants(&candidate, Default::default(), &global)?;
+                let mut source = import::read(&candidate, Default::default())?;
                 source.collision_strategy = collision_strategy;
                 additions.push(source);
             }
@@ -503,9 +529,11 @@ fn run() -> Result<i32> {
                 return Ok(0);
             }
             let imported: Vec<_> = additions.iter().map(|s| s.path.clone()).collect();
-            state.sources = import::reload_with_constants(&state.sources, &global)?;
+            state.sources = import::reload(&state.sources)?;
             state.sources.extend(additions);
             resolve(&mut state.sources, state.collision_strategy)?;
+            resolve::validate(&state)?;
+            state.version = 2;
             state.save(&path)?;
             for source in imported {
                 println!("Imported {}", source.display());
@@ -515,9 +543,10 @@ fn run() -> Result<i32> {
                 .context("Import saved, but directory shell setup failed")?;
         }
         Commands::Reload => {
-            state.sources =
-                import::reload_with_constants(&state.sources, &constants::load(&path)?)?;
+            state.sources = import::reload(&state.sources)?;
             resolve(&mut state.sources, state.collision_strategy)?;
+            resolve::validate(&state)?;
+            state.version = 2;
             state.save(&path)?;
             println!("Reloaded {} file(s)", state.sources.len());
             setup::for_aliases(&state, &path)?;
@@ -582,9 +611,10 @@ fn run() -> Result<i32> {
             );
         }
         Commands::SetCollisionStrategy { strategy } => {
-            state.sources =
-                import::reload_with_constants(&state.sources, &constants::load(&path)?)?;
+            state.sources = import::reload(&state.sources)?;
             resolve(&mut state.sources, strategy)?;
+            resolve::validate(&state)?;
+            state.version = 2;
             state.collision_strategy = strategy;
             state.save(&path)?;
             setup::for_aliases(&state, &path)?;
@@ -627,9 +657,21 @@ fn main() {
 }
 
 fn prompt_argument(arg: &script::Argument) -> anyhow::Result<String> {
-    let title = format!("{}:", arg.name);
+    let title = arg.hint.clone().unwrap_or_else(|| format!("{}:", arg.name));
     match &arg.choices {
-        Some(choices) => Ok(choices[ui::select(&title, choices)?].clone()),
+        Some(choices) => {
+            let labels = choices
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    ui::key_label(
+                        value,
+                        arg.choice_hints.get(index).and_then(Option::as_deref),
+                    )
+                })
+                .collect::<Vec<_>>();
+            Ok(choices[ui::select(&title, &labels)?].clone())
+        }
         None => ui::input(&title),
     }
 }

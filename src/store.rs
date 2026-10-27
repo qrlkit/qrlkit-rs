@@ -15,8 +15,12 @@ pub struct Browser {
     pub args: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<crate::script::Choice>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,7 +40,24 @@ pub struct Entry {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Group {
+    pub key: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+impl Entry {
+    pub fn is_data(&self) -> bool {
+        self.value.is_some() || self.choices.is_some()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Source {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub themes: BTreeMap<String, crate::theme::Theme>,
     /// Explicit per-file override; absent means use the global default.
@@ -95,7 +116,7 @@ fn tool_themes_enabled() -> bool {
 impl Default for State {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             default_theme: default_theme_name(),
             custom_themes: BTreeMap::new(),
             tool_themes: true,
@@ -119,7 +140,7 @@ impl State {
         };
         let state: Self = serde_yaml_ng::from_str(&content).context("Invalid QRL state YAML")?;
         ensure!(
-            state.version == 1,
+            matches!(state.version, 1 | 2),
             "Unsupported state version {}",
             state.version
         );
@@ -161,6 +182,18 @@ impl State {
             for theme in source.themes.values() {
                 theme.validate()?;
             }
+            let mut group_keys = BTreeSet::new();
+            for group in &source.groups {
+                ensure!(
+                    !group.key.is_empty()
+                        && group
+                            .key
+                            .iter()
+                            .all(|key| crate::import::valid_segment(key)),
+                    "Invalid group key"
+                );
+                ensure!(group_keys.insert(&group.key), "Duplicate group key");
+            }
             for key in &source.removed_keys {
                 ensure!(
                     !key.is_empty() && key.iter().all(|k| crate::import::valid_segment(k)),
@@ -182,14 +215,26 @@ impl State {
                 if let Some(hook) = &entry.dirhook {
                     crate::dirhook::validate(hook)?;
                 }
-                if let Some(script) = &entry.script {
+                let kinds = usize::from(entry.value.is_some())
+                    + usize::from(entry.choices.is_some())
+                    + usize::from(entry.script.is_some())
+                    + usize::from(!entry.url.is_empty());
+                ensure!(
+                    kinds == 1,
+                    "Node must define exactly one value, list, URL, or script"
+                );
+                if let Some(value) = &entry.value {
+                    crate::template::names(value)?;
+                } else if let Some(choices) = &entry.choices {
+                    crate::script::validate_choices(choices)?;
+                } else if let Some(script) = &entry.script {
                     ensure!(
                         entry.url.is_empty() && entry.args.is_none(),
                         "Resource cannot be both a script and a URL/path"
                     );
                     script.validate()?;
                 } else {
-                    crate::resource::validate(&entry.url)?;
+                    crate::template::validate_target(&entry.url)?;
                     crate::template::validate_arguments(&entry.url, entry.args.as_deref())?;
                 }
                 ensure!(
@@ -208,13 +253,17 @@ impl State {
                 );
             }
         }
-        for key in &keys {
-            for end in 1..key.len() {
-                ensure!(
-                    !keys.contains(&key[..end]),
-                    "Key is both a URL and a namespace: {}",
-                    key[..end].join(" ")
-                );
+        for source in &self.sources {
+            for entry in &source.entries {
+                if self.version == 1 || entry.is_data() {
+                    ensure!(
+                        !keys
+                            .iter()
+                            .any(|key| key.len() > entry.key.len() && key.starts_with(&entry.key)),
+                        "Data leaf cannot also be a namespace: {}",
+                        entry.key.join(" ")
+                    );
+                }
             }
         }
         Ok(())
@@ -264,6 +313,7 @@ impl State {
                 source.removed_keys.push(original);
             }
             source.entries.retain(|entry| !entry.key.starts_with(key));
+            source.groups.retain(|group| !group.key.starts_with(key));
         }
         // Fully removed imports can be added again and need not exist on disk.
         self.sources.retain(|source| !source.entries.is_empty());
@@ -316,6 +366,47 @@ impl State {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect()
+    }
+
+    pub fn contains(&self, key: &[String]) -> bool {
+        self.sources.iter().any(|source| {
+            source
+                .entries
+                .iter()
+                .any(|entry| entry.key.starts_with(key))
+        })
+    }
+
+    pub fn visible_children(&self, prefix: &[String]) -> Vec<String> {
+        self.children(prefix)
+            .into_iter()
+            .filter(|child| {
+                let mut key = prefix.to_vec();
+                key.push(child.clone());
+                !self
+                    .sources
+                    .iter()
+                    .flat_map(|source| &source.groups)
+                    .any(|group| {
+                        group.hidden
+                            && group.key.len() > prefix.len()
+                            && key.starts_with(&group.key)
+                    })
+            })
+            .collect()
+    }
+
+    pub fn hint(&self, key: &[String]) -> Option<&str> {
+        self.lookup(key)
+            .ok()
+            .and_then(|entry| entry.hint.as_deref())
+            .or_else(|| {
+                self.sources
+                    .iter()
+                    .flat_map(|source| &source.groups)
+                    .find(|group| group.key == key)
+                    .and_then(|group| group.hint.as_deref())
+            })
     }
 
     pub fn lookup(&self, key: &[String]) -> Result<&Entry> {
@@ -382,6 +473,7 @@ mod tests {
     fn children_are_immediate_sorted_unique_and_prefix_scoped() {
         let mut state = State::default();
         state.sources.push(Source {
+            groups: vec![],
             themes: BTreeMap::new(),
             collision_strategy: None,
             alias: None,
@@ -396,6 +488,8 @@ mod tests {
             ]
             .into_iter()
             .map(|key| Entry {
+                value: None,
+                choices: None,
                 hint: None,
                 browser: None,
                 key: key.into_iter().map(String::from).collect(),
@@ -424,6 +518,7 @@ mod tests {
         let path = dir.path().join("nested/state.yaml");
         let mut state = State::default();
         state.sources.push(Source {
+            groups: vec![],
             themes: BTreeMap::new(),
             collision_strategy: None,
             alias: None,
@@ -431,6 +526,8 @@ mod tests {
             renames: BTreeMap::new(),
             removed_keys: vec![],
             entries: vec![Entry {
+                value: None,
+                choices: None,
                 hint: None,
                 browser: None,
                 key: vec!["git".into(), "prs".into()],
@@ -459,7 +556,7 @@ mod tests {
         assert!(State::load(&path).unwrap().sources.is_empty());
         fs::write(&path, "{broken").unwrap();
         assert!(State::load(&path).is_err());
-        fs::write(&path, "version: 2\nbrowser: null\nsources: []").unwrap();
+        fs::write(&path, "version: 3\nbrowser: null\nsources: []").unwrap();
         assert!(State::load(&path).is_err());
     }
 }
