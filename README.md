@@ -193,63 +193,25 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 
 ## Config syntax
 
-Each example replaces the previous one.
-
-References use their full path, like `{shared.repos}`.
-Strings supply fixed values. Lists offer choices when no value is supplied.
-CLI values follow first-reference order, including lookup inputs.
-Use `args` to declare argument order. Repeated references reuse the same selection.
-
 ### URLs
 
 Open URLs in your default browser.
 
 ```toml
 [repos]
-open = "https://github.com/qrlkit/qrlkit-rs"
+rs = "https://github.com/qrlkit/qrlkit-rs"
 ```
 
-Choose the repository with an argument.
+Or go advanced with reuseable constants and hints.
 
 ```toml
-[repos]
-open = "https://github.com/qrlkit/{repo}"
-```
-
-Reuse an organization.
-
-```toml
-[shared]
-hidden = true
-org = "qrlkit"
-
-[repos]
-open = "https://github.com/{shared.org}/{repo}"
-```
-
-Add hints and override the browser.
-
-```toml
-[shared]
-hidden = true
-org = "qrlkit"
-
-[repos]
-browser = "firefox"
-# hint: Browse the source code
-open = "https://github.com/{shared.org}/{repo}"
-```
-
-Offer repository choices.
-
-```toml
-[shared]
+[const]
 hidden = true
 org = "qrlkit"
 repos = ["qrlkit-rs", "qrlkit-web"]
 
 [repos.open]
-url = "https://github.com/{shared.org}/{shared.repos}"
+url = "https://github.com/{const.org}/{const.repos}"
 hint = "Browse the source code"
 browser = "firefox"
 ```
@@ -273,46 +235,16 @@ Print file paths without configured hooks.
 readme = "~/dev/qrlkit-rs/README.md"
 ```
 
-Choose the project with an argument.
+Or beef it up with reuseable constants, hints and a custom filehook: 
 
 ```toml
-[files]
-readme = "~/dev/{repo}/README.md"
-```
-
-Reuse your development directory across paths.
-
-```toml
-[shared]
-hidden = true
-root = "~/dev"
-
-[files]
-readme = "{shared.root}/{repo}/README.md"
-```
-
-Add hints and open your editor.
-
-```toml
-[shared]
-hidden = true
-root = "~/dev"
-
-[files]
-filehook = "nvim $file"
-readme = "{shared.root}/{repo}/README.md" # hint: Edit the project README
-```
-
-Offer project choices before opening files.
-
-```toml
-[shared]
+[const]
 hidden = true
 root = "~/dev"
 repos = ["qrlkit-rs", "qrlkit-web"]
 
 [files.readme]
-url = "{shared.root}/{shared.repos}/README.md"
+url = "{const.root}/{const.repos}/README.md"
 hint = "Edit the project README"
 filehook = "nvim $file"
 ```
@@ -322,52 +254,19 @@ qrlkit files readme qrlkit-rs  # Open directly
 qrlkit files readme            # Choose interactively
 ```
 
-Set global defaults with `qrlkit set-filehook`.
-
 ### Dirs
 
-Change directories through the shell integration.
+By default you can `cd` into a dir: 
 
 ```toml
 [dirs]
 project = "~/dev/qrlkit-rs"
 ```
 
-Choose the project with an argument.
+Or mod it similarly to files and urls with consts, dirhooks and hints:  
 
 ```toml
-[dirs]
-project = "~/dev/{repo}"
-```
-
-Reuse your development directory across projects.
-
-```toml
-[shared]
-hidden = true
-root = "~/dev"
-
-[dirs]
-project = "{shared.root}/{repo}"
-```
-
-Add hints and list directory contents.
-
-```toml
-[shared]
-hidden = true
-root = "~/dev"
-
-[dirs]
-dirhook = "cd $dir && tree -L 1"
-# hint: Enter and inspect the project
-project = "{shared.root}/{repo}"
-```
-
-Offer project choices before changing directories.
-
-```toml
-[shared]
+[const]
 hidden = true
 root = "~/dev"
 repos = ["qrlkit-rs", "qrlkit-web"]
@@ -382,8 +281,6 @@ dirhook = "cd $dir && tree -L 1"
 qrlkit dirs project qrlkit-rs  # Open directly
 qrlkit dirs project            # Choose interactively
 ```
-
-Set global defaults with `qrlkit set-dirhook`.
 
 ### Scripts
 
