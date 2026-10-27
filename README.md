@@ -360,23 +360,6 @@ qrlkit greet Hey
 
 Supported shells: `bash`, `sh`, and `zsh`.
 
-Use a script's output in another resource.
-
-```toml
-[system]
-hidden = true
-
-[system.hostname]
-run = "hostname"
-
-[logs]
-url = "https://logs.example.com/search?host={system.hostname}"
-```
-
-Referenced scripts run only when needed. Their stdout is reused within the command,
-with trailing newlines removed. A failed script stops the command.
-Script bodies stay literal; use `args` and `env` to pass values.
-
 ### Shared values
 
 Put shared values in any config and register it with `qrlkit add`.
@@ -407,9 +390,6 @@ run = 'printf "Hello, %s!\n" "$NAME"'
 NAME = "{shared.name}"
 ```
 
-`constants.toml` is no longer loaded automatically. Register shared values explicitly
-and replace `{global.name}` with their full path. `constants` is now an ordinary group.
-
 ### Composition
 
 Reference another resource's target without opening it.
@@ -432,46 +412,6 @@ repos prs            # Choose the repository
 ```
 
 Missing references and circular dependencies are errors.
-
-### Lookups
-
-Choose a URL part from a mapping. Use one selector for a flat mapping,
-or multiple selectors to walk nested mappings.
-
-```toml
-[projects]
-hidden = true
-repos = ["qrlkit-rs", "qrlkit-web"]
-
-[shared]
-hidden = true
-environments = ["sim", "live"]
-
-[logs]
-url = "https://{logs.subdomains[projects.repos, shared.environments]}.logs.example.com"
-
-[logs.subdomains]
-hidden = true
-
-[logs.subdomains.qrlkit-rs]
-sim = "rust-sandbox"
-live = "rust-production"
-
-[logs.subdomains.qrlkit-web]
-sim = "web-sandbox"
-live = "web-production"
-```
-
-Put `url` directly on a group to call it without a subcommand.
-
-```sh
-logs qrlkit-rs live  # Opens https://rust-production.logs.example.com
-logs qrlkit-rs       # Choose the environment
-logs                 # Choose the repository and environment
-```
-
-Missing lookup keys are errors. Child commands take precedence over arguments;
-use `--` before a value that matches a child command's name.
 
 ### Hints and hidden groups
 
