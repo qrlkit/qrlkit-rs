@@ -1,3 +1,6 @@
+## 0.12.0
+- Breaking: remove constants syntax. Everything is now composeable and can be used as constants
+
 ## 0.11.0
 - Add support for themes
 
