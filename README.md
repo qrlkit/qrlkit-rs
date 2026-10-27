@@ -395,20 +395,36 @@ NAME = "{shared.name}"
 Reference another resource's target without opening it.
 
 ```toml
-[shared]
-hidden = true
-repos = ["qrlkit-rs", "qrlkit-web"]
-
 [repos.open]
-url = "https://github.com/qrlkit/{shared.repos}"
+url = "https://github.com/qrlkit/qrlkit-rs"
 
-[repos.prs]
-url = "{repos.open}/pulls"
+[branch]
+run = "git branch --show-current"
+
+[repos.compare]
+url = "{repos.open}/compare/main...{branch}"
+
+[release]
+hidden = true
+version = "0.12.0"
+os = ["linux", "macos"]
+arch = ["x64", "arm64"]
+
+[release.platforms.linux]
+x64 = "linux-x86_64"
+arm64 = "linux-aarch64"
+
+[release.platforms.macos]
+x64 = "macos-x86_64"
+arm64 = "macos-aarch64"
+
+[repos.download]
+url = "{repos.open}/releases/download/v{release.version}/qrlkit-{release.version}-{release.platforms[release.os, release.arch]}.tar.gz"
 ```
 
 ```sh
-repos prs qrlkit-web  # Opens the repository's pull requests
-repos prs            # Choose the repository
+repos compare               # Compare main with the current branch
+repos download macos arm64   # Download the macOS ARM64 release
 ```
 
 Missing references and circular dependencies are errors.
