@@ -56,21 +56,10 @@ pub fn valid_segment(key: &str) -> bool {
         && !key.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-#[cfg(test)]
 pub fn read(path: &Path, renames: BTreeMap<String, String>) -> Result<Source> {
-    read_with_constants(path, renames, &BTreeMap::new())
-}
-
-pub fn read_with_constants(
-    path: &Path,
-    renames: BTreeMap<String, String>,
-    global: &crate::constants::Constants,
-) -> Result<Source> {
     let path = fs::canonicalize(path).with_context(|| format!("Cannot find {}", path.display()))?;
     let text = fs::read_to_string(&path)?;
     let mut value = crate::format::parse(&path, &text)?;
-    crate::constants::resolve(&mut value, global)
-        .with_context(|| format!("In {}", path.display()))?;
     let hints = match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -102,27 +91,29 @@ pub fn read_with_constants(
     };
     let mut themes = BTreeMap::new();
     crate::theme::extract(&mut value, &mut vec![], &mut themes)?;
-    let mut entries = vec![];
-    flatten(
-        &value,
-        &mut vec![],
-        &mut entries,
-        path.parent().unwrap(),
-        None,
-        None,
-        None,
-    )?;
+    let mut importer = Importer {
+        entries: vec![],
+        groups: vec![],
+        source_dir: path.parent().unwrap(),
+    };
+    importer.flatten(&value, &mut vec![], None, None, None)?;
+    let mut entries = importer.entries;
+    let mut groups = importer.groups;
     ensure!(!entries.is_empty(), "No resources in {}", path.display());
     for entry in &mut entries {
-        if entry.script.is_none() {
-            entry.url = crate::resource::normalize(&entry.url)?;
-        }
         if entry.hint.is_none() {
             entry.hint = hints.get(&entry.key).cloned();
         }
         entry.key = map_key(&entry.key, &renames, false);
     }
+    for group in &mut groups {
+        if group.hint.is_none() {
+            group.hint = hints.get(&group.key).cloned();
+        }
+        group.key = map_key(&group.key, &renames, false);
+    }
     Ok(Source {
+        groups,
         themes,
         collision_strategy: None,
         alias,
@@ -133,152 +124,206 @@ pub fn read_with_constants(
     })
 }
 
-fn flatten(
-    value: &Node,
-    key: &mut Vec<String>,
-    entries: &mut Vec<Entry>,
-    source_dir: &Path,
-    filehook: Option<&str>,
-    dirhook: Option<&str>,
-    browser: Option<&str>,
-) -> Result<()> {
-    match value {
-        Node::Array(_) => anyhow::bail!("Arrays are only supported in constants and args"),
-        Node::Table(table) => {
-            let browser = match table.get("browser") {
-                Some(value) => Some(value.as_str().context("browser must be a string")?),
-                None => browser,
-            };
-            let filehook = match table.get("filehook") {
-                Some(value) => {
-                    let hook = value.as_str().context("filehook must be a string")?;
-                    crate::filehook::validate(hook)?;
-                    Some(hook)
-                }
-                None => filehook,
-            };
-            let dirhook = match table.get("dirhook") {
-                Some(value) => {
-                    let hook = value.as_str().context("dirhook must be a string")?;
-                    crate::dirhook::validate(hook)?;
-                    Some(hook)
-                }
-                None => dirhook,
-            };
-            if table.contains_key("url")
-                && (table.contains_key("hint") || table.contains_key("args"))
-            {
-                ensure!(!key.is_empty(), "Resource objects must have a name");
-                ensure!(
-                    table.keys().all(|k| matches!(
-                        k.as_str(),
-                        "url" | "hint" | "args" | "browser" | "filehook" | "dirhook"
-                    )),
-                    "Resource {} cannot contain child resources or unknown settings",
-                    key.join(" ")
-                );
-                let hint = table
-                    .get("hint")
-                    .map(|v| v.as_str().context("hint must be a string"))
-                    .transpose()?;
-                let url = table["url"].as_str().context("url must be a string")?;
-                flatten(
-                    &Node::String(url.to_owned()),
-                    key,
-                    entries,
-                    source_dir,
-                    filehook,
-                    dirhook,
-                    browser,
-                )?;
-                let entry = entries.last_mut().unwrap();
-                entry.hint = hint
-                    .map(str::trim)
-                    .map(str::to_owned)
-                    .filter(|s| !s.is_empty());
-                entry.args = crate::script::arguments(table.get("args"))?;
-                crate::template::validate_arguments(url, entry.args.as_deref())?;
-                return Ok(());
-            }
-            if let Some(run) = table.get("run") {
-                ensure!(!key.is_empty(), "run must belong to a named resource table");
-                ensure!(
-                    table
-                        .keys()
-                        .all(|k| matches!(k.as_str(), "run" | "shell" | "hint" | "args" | "env")),
-                    "Script {} cannot contain child resources or unknown settings",
-                    key.join(" ")
-                );
-                let body = run.as_str().context("run must be a string")?.to_owned();
-                let shell = match table.get("shell") {
-                    Some(value) => value.as_str().context("shell must be a string")?,
-                    None => "bash",
-                }
-                .to_owned();
-                let script = crate::script::Script {
-                    body,
-                    shell,
-                    cwd: source_dir.to_path_buf(),
-                    args: crate::script::arguments(table.get("args"))?,
-                    env: crate::script::environment(table.get("env"))?,
-                };
-                script.validate()?;
-                entries.push(Entry {
-                    hint: table
-                        .get("hint")
-                        .map(|value| value.as_str().context("hint must be a string"))
-                        .transpose()?
-                        .map(str::trim)
-                        .filter(|hint| !hint.is_empty())
-                        .map(str::to_owned),
+struct Importer<'a> {
+    entries: Vec<Entry>,
+    groups: Vec<crate::store::Group>,
+    source_dir: &'a Path,
+}
+
+impl Importer<'_> {
+    fn flatten(
+        &mut self,
+        value: &Node,
+        key: &mut Vec<String>,
+        filehook: Option<&str>,
+        dirhook: Option<&str>,
+        browser: Option<&str>,
+    ) -> Result<()> {
+        match value {
+            Node::Bool(_) => anyhow::bail!("Booleans are supported only in hidden metadata"),
+            Node::Array(_) => {
+                self.entries.push(Entry {
                     key: key.clone(),
-                    url: String::new(),
-                    script: Some(script),
-                    args: None,
-                    browser: None,
-                    filehook: None,
-                    dirhook: None,
+                    choices: Some(crate::script::choices(value)?),
+                    ..Default::default()
                 });
-                return Ok(());
             }
-            ensure!(
-                !table.contains_key("shell"),
-                "shell requires run at {}",
-                key.join(" ")
-            );
-            for (segment, child) in table {
-                if matches!(segment.as_str(), "filehook" | "dirhook" | "browser") {
-                    continue;
+            Node::String(value) => {
+                crate::template::names(value)?;
+                let target = crate::resource::is_url(value)
+                    || value.starts_with(['/', '~'])
+                    || value.starts_with("./")
+                    || value.starts_with("../")
+                    || value.contains("://")
+                    || value.starts_with("javascript:")
+                    || (value.starts_with('{') && value.contains('/'));
+                let mut entry = Entry {
+                    key: key.clone(),
+                    browser: browser.map(str::to_owned),
+                    filehook: filehook.map(str::to_owned),
+                    dirhook: dirhook.map(str::to_owned),
+                    ..Default::default()
+                };
+                if target {
+                    crate::template::validate_target(value)
+                        .with_context(|| format!("At {}", key.join(" ")))?;
+                    entry.url = value.clone();
+                } else {
+                    entry.value = Some(value.clone());
                 }
-                ensure!(valid_segment(segment), "Invalid key segment: {segment:?}");
-                key.push(segment.clone());
-                flatten(child, key, entries, source_dir, filehook, dirhook, browser)?;
-                key.pop();
+                self.entries.push(entry);
+            }
+            Node::Table(table) => {
+                let string = |name: &str| -> Result<Option<&str>> {
+                    table
+                        .get(name)
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .with_context(|| format!("{name} must be a string"))
+                        })
+                        .transpose()
+                };
+                let hint = string("hint")?
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned);
+                let hidden = match table.get("hidden") {
+                    None => false,
+                    Some(Node::Bool(value)) => *value,
+                    Some(_) => anyhow::bail!("hidden must be a boolean"),
+                };
+                if !key.is_empty() {
+                    self.groups.push(crate::store::Group {
+                        key: key.clone(),
+                        hint: hint.clone(),
+                        hidden,
+                    });
+                } else {
+                    ensure!(
+                        !hidden && hint.is_none(),
+                        "Root hint/hidden metadata requires a named group"
+                    );
+                }
+                let browser = string("browser")?.or(browser);
+                let filehook = string("filehook")?.or(filehook);
+                let dirhook = string("dirhook")?.or(dirhook);
+                if let Some(hook) = filehook {
+                    crate::filehook::validate(hook)?;
+                }
+                if let Some(hook) = dirhook {
+                    crate::dirhook::validate(hook)?;
+                }
+                let run = string("run")?;
+                let url = string("url")?;
+                ensure!(
+                    usize::from(run.is_some())
+                        + usize::from(url.is_some())
+                        + usize::from(table.contains_key("values"))
+                        <= 1,
+                    "A node cannot combine run, url, and values"
+                );
+                if run.is_some() || url.is_some() || table.contains_key("values") {
+                    ensure!(!key.is_empty(), "Actions and lists require a named node");
+                }
+                if let Some(values) = table.get("values") {
+                    ensure!(
+                        table
+                            .keys()
+                            .all(|key| matches!(key.as_str(), "values" | "hint" | "hidden")),
+                        "List nodes accept only values, hint, and hidden"
+                    );
+                    self.entries.push(Entry {
+                        key: key.clone(),
+                        hint,
+                        choices: Some(crate::script::choices(values)?),
+                        ..Default::default()
+                    });
+                    return Ok(());
+                }
+                if let Some(run) = run {
+                    ensure!(
+                        !table.contains_key("browser")
+                            && !table.contains_key("filehook")
+                            && !table.contains_key("dirhook"),
+                        "Scripts cannot define browser or path hooks"
+                    );
+                    let script = crate::script::Script {
+                        body: run.to_owned(),
+                        shell: string("shell")?.unwrap_or("bash").to_owned(),
+                        cwd: self.source_dir.to_path_buf(),
+                        args: crate::script::arguments(table.get("args"))?,
+                        env: crate::script::environment(table.get("env"))?,
+                    };
+                    script.validate()?;
+                    for value in script.env.values() {
+                        crate::template::names(value)?;
+                    }
+                    self.entries.push(Entry {
+                        key: key.clone(),
+                        hint: hint.clone(),
+                        script: Some(script),
+                        ..Default::default()
+                    });
+                } else {
+                    ensure!(
+                        !table.contains_key("shell") && !table.contains_key("env"),
+                        "shell and env require run at {}",
+                        key.join(" ")
+                    );
+                }
+                if let Some(url) = url {
+                    crate::template::validate_target(url)?;
+                    let args = crate::script::arguments(table.get("args"))?;
+                    crate::template::validate_arguments(url, args.as_deref())?;
+                    self.entries.push(Entry {
+                        key: key.clone(),
+                        hint,
+                        url: url.to_owned(),
+                        args,
+                        browser: browser.map(str::to_owned),
+                        filehook: filehook.map(str::to_owned),
+                        dirhook: dirhook.map(str::to_owned),
+                        ..Default::default()
+                    });
+                }
+                ensure!(
+                    run.is_some() || url.is_some() || !table.contains_key("args"),
+                    "args requires run or url"
+                );
+                for (segment, child) in table {
+                    if matches!(
+                        segment.as_str(),
+                        "hint"
+                            | "hidden"
+                            | "values"
+                            | "run"
+                            | "url"
+                            | "shell"
+                            | "env"
+                            | "args"
+                            | "browser"
+                            | "filehook"
+                            | "dirhook"
+                    ) {
+                        continue;
+                    }
+                    ensure!(valid_segment(segment), "Invalid key segment: {segment:?}");
+                    key.push(segment.clone());
+                    self.flatten(child, key, filehook, dirhook, browser)?;
+                    key.pop();
+                }
             }
         }
-        Node::String(url) => {
-            crate::template::names(url)?;
-            crate::resource::validate(url).with_context(|| format!("At {}", key.join(" ")))?;
-            entries.push(Entry {
-                hint: None,
-                key: key.clone(),
-                url: url.clone(),
-                script: None,
-                args: None,
-                browser: browser.map(str::to_owned),
-                filehook: filehook.map(str::to_owned),
-                dirhook: dirhook.map(str::to_owned),
-            });
-        }
+        Ok(())
     }
-    Ok(())
 }
 
 pub fn roots(source: &Source) -> BTreeSet<String> {
     source.entries.iter().map(|e| e.key[0].clone()).collect()
 }
 
-/// Shared namespaces merge; resources conflict with equal paths or descendants.
+/// Actions can share namespaces with children; data leaves cannot have children.
 pub fn collision(
     sources: &[Source],
     strategy: CollisionStrategy,
@@ -300,9 +345,11 @@ pub fn collision(
                 for other_entry in &other.entries {
                     let path = if strategy == CollisionStrategy::Rename {
                         (entry.key[0] == other_entry.key[0]).then_some(&entry.key[..1])
-                    } else if entry.key.starts_with(&other_entry.key) {
+                    } else if entry.key == other_entry.key {
+                        Some(entry.key.as_slice())
+                    } else if entry.key.starts_with(&other_entry.key) && other_entry.is_data() {
                         Some(other_entry.key.as_slice())
-                    } else if other_entry.key.starts_with(&entry.key) {
+                    } else if other_entry.key.starts_with(&entry.key) && entry.is_data() {
                         Some(entry.key.as_slice())
                     } else {
                         None
@@ -377,6 +424,11 @@ pub fn rename(source: &mut Source, path: &str, alias: &str) -> Result<()> {
         }
     }
     source.renames.insert(original, target.join(" "));
+    for group in &mut source.groups {
+        if group.key.starts_with(&key) {
+            group.key[..key.len()].clone_from_slice(&target);
+        }
+    }
     for entry in &mut source.entries {
         if entry.key.starts_with(&key) {
             entry.key[..key.len()].clone_from_slice(&target);
@@ -385,19 +437,13 @@ pub fn rename(source: &mut Source, path: &str, alias: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
 pub fn reload(sources: &[Source]) -> Result<Vec<Source>> {
-    reload_with_constants(sources, &BTreeMap::new())
-}
-
-pub fn reload_with_constants(
-    sources: &[Source],
-    global: &crate::constants::Constants,
-) -> Result<Vec<Source>> {
     sources.iter().map(|s| {
         // Validate and transform the same snapshot; do not reread a changing file.
-        let mut loaded = read_with_constants(&s.path, BTreeMap::new(), global)?;
+        let mut loaded = read(&s.path, BTreeMap::new())?;
         loaded.entries.retain(|entry| !s.removed_keys.iter().any(|prefix| entry.key.starts_with(prefix)));
+        loaded.groups.retain(|group| !s.removed_keys.iter().any(|prefix| group.key.starts_with(prefix)));
+        for group in &mut loaded.groups { group.key = map_key(&group.key, &s.renames, false); }
         loaded.removed_keys = s.removed_keys.clone();
         let mut effective = BTreeMap::new();
         for entry in &mut loaded.entries {
@@ -594,6 +640,7 @@ echo '# hint: Inside script'
             collision(&[a.clone(), b], CollisionStrategy::Rename),
             Some((0, 1, "qk".into()))
         );
+        let a = fixture(dir.path(), "a.toml", "[qk.git]\nprs = 'fixed value'");
         for text in [
             "[qk.git]\nprs = 'https://a.test'",
             "[qk.git.prs]\nchild = 'https://b.test'",
@@ -814,7 +861,6 @@ echo '# hint: Inside script'
             "",
             "[git]\nprs = true",
             "[git]\nprs = [1, 2]",
-            "[git]\nprs = 'ambiguous/path'",
             "[git]\nprs = 'file:///tmp/test'",
             "[git]\nprs = 'https://a.test'\nprs = 'https://b.test'",
             "[git]\nprs = 42",
@@ -1046,7 +1092,6 @@ quoted:
             r#"{"repo":{"url":"https://example.com","hint":42}}"#,
             r#"{"repo":{"url":"https://example.com","hint":{}}}"#,
             r#"{"repo":{"url":{},"hint":"Opens repo"}}"#,
-            r#"{"repo":{"url":"https://example.com","hint":"Opens repo","child":"./file"}}"#,
             r#"{"repo":{"url":"https://example.com","hint":"Opens repo","run":"echo hi"}}"#,
             r#"{"task":{"run":"echo hi","hint":{}}}"#,
         ] {
@@ -1065,7 +1110,7 @@ quoted:
                 BTreeMap::new(),
             )
             .unwrap();
-            assert_eq!(source.entries.len(), 6);
+            assert_eq!(source.entries.len(), 8);
             for (key, hint) in [
                 ("web docs", "Opens the documentation"),
                 ("paths repo", "Opens repo"),

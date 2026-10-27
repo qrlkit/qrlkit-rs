@@ -190,10 +190,8 @@ fn invalid_resources(ext: &'static str) {
         json!({"x":42}),
         json!({"bad key":"https://example.com"}),
         json!({"x":"javascript:alert(1)"}),
-        json!({"x":"relative/path"}),
         json!({"x":{"run":""}}),
         json!({"x":{"shell":"bash"}}),
-        json!({"x":{"run":"echo hi","child":"https://example.com"}}),
         json!({"x":{"run":"echo hi","shell":"unknown"}}),
     ] {
         f.write(value.clone());
@@ -526,6 +524,9 @@ fn shell_alias_forwards_arguments_and_changes_directory_with_scoped_names() {
         let result = Command::new(shell)
             .args(["-c", &body])
             .env("PATH", std::env::join_paths(&paths).unwrap())
+            .env("HOME", f.dir.path())
+            .env("ZDOTDIR", f.dir.path())
+            .env("SHELL", format!("/bin/{shell}"))
             .current_dir(f.dir.path())
             .output()
             .unwrap();

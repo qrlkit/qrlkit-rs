@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
-    process::Command,
+    process::{Command, Stdio},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -18,12 +18,81 @@ pub struct Script {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Argument {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choice_hints: Vec<Option<String>>,
     pub name: String,
     #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Choice {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+pub fn choices(node: &Node) -> Result<Vec<Choice>> {
+    let Node::Array(values) = node else {
+        anyhow::bail!("values must be a list");
+    };
+    let choices = values
+        .iter()
+        .map(|value| match value {
+            Node::String(value) => Ok(Choice {
+                value: value.clone(),
+                hint: None,
+            }),
+            Node::Table(table) => {
+                ensure!(
+                    table
+                        .keys()
+                        .all(|key| matches!(key.as_str(), "value" | "hint")),
+                    "Choices accept only value and hint"
+                );
+                Ok(Choice {
+                    value: table
+                        .get("value")
+                        .and_then(Node::as_str)
+                        .context("Choice requires a string value")?
+                        .to_owned(),
+                    hint: table
+                        .get("hint")
+                        .map(|node| {
+                            node.as_str()
+                                .context("Choice hint must be a string")
+                                .map(str::to_owned)
+                        })
+                        .transpose()?,
+                })
+            }
+            _ => anyhow::bail!("Choices must be strings or value/hint objects"),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_choices(&choices)?;
+    Ok(choices)
+}
+
+pub fn validate_choices(choices: &[Choice]) -> Result<()> {
+    ensure!(!choices.is_empty(), "List must have at least one choice");
+    let mut seen = BTreeSet::new();
+    for choice in choices {
+        ensure!(!choice.value.contains('\0'), "Choices cannot contain NUL");
+        ensure!(
+            seen.insert(&choice.value),
+            "Duplicate choice: {}",
+            choice.value
+        );
+    }
+    Ok(())
 }
 
 pub fn arguments(value: Option<&Node>) -> Result<Option<Vec<Argument>>> {
@@ -49,9 +118,20 @@ pub fn arguments(value: Option<&Node>) -> Result<Option<Vec<Argument>>> {
                         .and_then(Node::as_str)
                         .context("Argument requires a string name")?
                         .to_owned();
+                    let mut reference = None;
                     let choices = table
                         .get("enum")
                         .map(|value| {
+                            if let Node::Table(table) = value {
+                                ensure!(table.len() == 1, "Enum reference accepts only ref");
+                                let name = table
+                                    .get("ref")
+                                    .and_then(Node::as_str)
+                                    .context("Enum reference requires a string ref")?;
+                                crate::template::expression(name)?;
+                                reference = Some(name.to_owned());
+                                return Ok(Vec::new());
+                            }
                             let Node::Array(values) = value else {
                                 anyhow::bail!("Argument {name} requires an enum list")
                             };
@@ -65,7 +145,12 @@ pub fn arguments(value: Option<&Node>) -> Result<Option<Vec<Argument>>> {
                                 .collect::<Result<Vec<_>>>()
                         })
                         .transpose()?;
-                    Ok(Argument { name, choices })
+                    Ok(Argument {
+                        name,
+                        choices: if reference.is_some() { None } else { choices },
+                        reference,
+                        ..Default::default()
+                    })
                 })
                 .collect()
         })
@@ -111,7 +196,7 @@ impl Script {
         validate_arguments(self.args.as_deref())?;
         for (key, value) in &self.env {
             ensure!(
-                crate::constants::valid_name(key),
+                crate::template::valid_name(key),
                 "Invalid environment variable: {key}"
             );
             ensure!(
@@ -139,6 +224,17 @@ impl Script {
         let arguments = self.resolve_arguments(arguments, |arg| {
             anyhow::bail!("Missing argument: {}", arg.name)
         })?;
+        let mut command = self.command(&arguments);
+        let status = command
+            .status()
+            .with_context(|| format!("Cannot run {} in {}", self.shell, self.cwd.display()))?;
+        use std::os::unix::process::ExitStatusExt;
+        Ok(status
+            .code()
+            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)))
+    }
+
+    fn command(&self, arguments: &[String]) -> Command {
         let mut command = Command::new(&self.shell);
         match self.shell.as_str() {
             "bash" | "zsh" => {
@@ -154,18 +250,35 @@ impl Script {
         command.args(arguments).envs(&self.env);
         // A script may invoke QRL, but must not change the outer shell wrapper's directory.
         command.current_dir(&self.cwd).env_remove("QRL_CD_FILE");
-        let status = command
-            .status()
+        command
+    }
+
+    pub fn capture(&self, arguments: &[String]) -> Result<String> {
+        let output = self
+            .command(arguments)
+            .stdin(Stdio::null())
+            .stderr(Stdio::inherit())
+            .output()
             .with_context(|| format!("Cannot run {} in {}", self.shell, self.cwd.display()))?;
-        use std::os::unix::process::ExitStatusExt;
-        Ok(status
-            .code()
-            .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)))
+        ensure!(
+            output.status.success(),
+            "Referenced script failed: {}",
+            output.status
+        );
+        let mut value = String::from_utf8(output.stdout).context("Script output must be UTF-8")?;
+        ensure!(!value.contains('\0'), "Script output cannot contain NUL");
+        while value.ends_with('\n') {
+            value.pop();
+            if value.ends_with('\r') {
+                value.pop();
+            }
+        }
+        Ok(value)
     }
 }
 
 impl Argument {
-    fn validate_value(&self, value: &str) -> Result<()> {
+    pub fn validate_value(&self, value: &str) -> Result<()> {
         ensure!(!value.contains('\0'), "Arguments cannot contain NUL");
         let Some(choices) = &self.choices else {
             return Ok(());
@@ -185,7 +298,7 @@ pub fn validate_arguments(args: Option<&[Argument]>) -> Result<()> {
         let mut names = BTreeSet::new();
         for arg in args {
             ensure!(
-                crate::constants::valid_name(&arg.name),
+                crate::template::valid_name(&arg.name),
                 "Invalid argument name: {}",
                 arg.name
             );
@@ -193,6 +306,21 @@ pub fn validate_arguments(args: Option<&[Argument]>) -> Result<()> {
                 names.insert(&arg.name),
                 "Duplicate argument name: {}",
                 arg.name
+            );
+            if let Some(reference) = &arg.reference {
+                ensure!(
+                    arg.choices.is_none(),
+                    "Argument cannot combine a reference and literal choices"
+                );
+                crate::template::expression(reference)?;
+            }
+            ensure!(
+                arg.choice_hints.is_empty()
+                    || arg
+                        .choices
+                        .as_ref()
+                        .is_some_and(|choices| choices.len() == arg.choice_hints.len()),
+                "Choice hints must match the choices"
             );
             let Some(allowed) = &arg.choices else {
                 continue;

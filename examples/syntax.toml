@@ -3,8 +3,9 @@
 # File-level theme for namespaces without their own complete theme.
 theme = { border = "rounded", border_color = "#9399b2" }
 
-# Reusable values local to this file
-[constants]
+# Reusable values, also available to other registered configs
+[shared]
+hidden = true
 root = "/home/bob/work"
 release_types = ["major", "minor", "patch"]
 
@@ -20,7 +21,7 @@ docs = "https://docs.rs/ratatui/latest/ratatui/"
 [paths]
 repo = "./" # hint: Opens repo
 # Absolute path
-project = "{constants.root}/project"
+project = "{shared.root}/project"
 readme = "./README.md"
 
 # A custom theme replaces the parent theme; omitted fields use terminal defaults.
@@ -46,7 +47,7 @@ shell = "bash"
 # Prints a preview only. Omit arguments to use the prompts.
 [scripts.prepare]
 args = [
-  { name = "type", enum = { ref = "constants.release_types" } },
+  { name = "type", enum = { ref = "shared.release_types" } },
   { name = "note" },
   { name = "region", enum = ["eu", "us"] },
 ]
@@ -56,4 +57,4 @@ printf 'Release: %s\nNote: %s\nRegion: %s\nProject: %s\n' "$1" "$2" "$3" "$PROJE
 shell = "bash"
 
 [scripts.prepare.env]
-PROJECT_ROOT = "{constants.root}/project"
+PROJECT_ROOT = "{shared.root}/project"

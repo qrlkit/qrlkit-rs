@@ -195,8 +195,10 @@ State is stored in `$XDG_STATE_HOME/qrlkit/state.yaml` on Linux, falling back to
 
 Each example replaces the previous one.
 
-Resource arguments match every placeholder name.
-CLI values follow argument declaration order.
+References use their full path, like `{shared.repos}`.
+Strings supply fixed values. Lists offer choices when no value is supplied.
+CLI values follow first-reference order, including lookup inputs.
+Use `args` to declare argument order. Repeated references reuse the same selection.
 
 ### URLs
 
@@ -214,42 +216,42 @@ Choose the repository with an argument.
 open = "https://github.com/qrlkit/{repo}"
 ```
 
-Reuse an organization through a constant.
+Reuse an organization.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 org = "qrlkit"
 
 [repos]
-open = "https://github.com/{constants.org}/{repo}"
+open = "https://github.com/{shared.org}/{repo}"
 ```
 
 Add hints and override the browser.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 org = "qrlkit"
 
 [repos]
 browser = "firefox"
 # hint: Browse the source code
-open = "https://github.com/{constants.org}/{repo}"
+open = "https://github.com/{shared.org}/{repo}"
 ```
 
-Offer repository choices from a constant.
+Offer repository choices.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 org = "qrlkit"
 repos = ["qrlkit-rs", "qrlkit-web"]
 
 [repos.open]
-url = "https://github.com/{constants.org}/{repo}"
+url = "https://github.com/{shared.org}/{shared.repos}"
 hint = "Browse the source code"
 browser = "firefox"
-args = [
-  { name = "repo", enum = { ref = "constants.repos" } },
-]
 ```
 
 ```sh
@@ -281,37 +283,38 @@ readme = "~/dev/{repo}/README.md"
 Reuse your development directory across paths.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 root = "~/dev"
 
 [files]
-readme = "{constants.root}/{repo}/README.md"
+readme = "{shared.root}/{repo}/README.md"
 ```
 
 Add hints and open your editor.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 root = "~/dev"
 
 [files]
 filehook = "nvim $file"
-readme = "{constants.root}/{repo}/README.md" # hint: Edit the project README
+readme = "{shared.root}/{repo}/README.md" # hint: Edit the project README
 ```
 
 Offer project choices before opening files.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 root = "~/dev"
+repos = ["qrlkit-rs", "qrlkit-web"]
 
 [files.readme]
-url = "{constants.root}/{repo}/README.md"
+url = "{shared.root}/{shared.repos}/README.md"
 hint = "Edit the project README"
 filehook = "nvim $file"
-args = [
-  { name = "repo", enum = ["qrlkit-rs", "qrlkit-web"] },
-]
 ```
 
 ```sh
@@ -340,38 +343,39 @@ project = "~/dev/{repo}"
 Reuse your development directory across projects.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 root = "~/dev"
 
 [dirs]
-project = "{constants.root}/{repo}"
+project = "{shared.root}/{repo}"
 ```
 
 Add hints and list directory contents.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 root = "~/dev"
 
 [dirs]
 dirhook = "cd $dir && tree -L 1"
 # hint: Enter and inspect the project
-project = "{constants.root}/{repo}"
+project = "{shared.root}/{repo}"
 ```
 
 Offer project choices before changing directories.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 root = "~/dev"
+repos = ["qrlkit-rs", "qrlkit-web"]
 
 [dirs.project]
-url = "{constants.root}/{repo}"
+url = "{shared.root}/{shared.repos}"
 hint = "Enter and inspect the project"
 dirhook = "cd $dir && tree -L 1"
-args = [
-  { name = "repo", enum = ["qrlkit-rs", "qrlkit-web"] },
-]
 ```
 
 ```sh
@@ -398,40 +402,43 @@ args = [{ name = "name" }]
 run = 'printf "Hello, %s!\n" "$1"'
 ```
 
-Supply constants through `env` without prompting.
+Supply fixed values through `env` without prompting.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 name = "World"
 
 [greet]
 run = 'printf "Hello, %s!\n" "$NAME"'
 
 [greet.env]
-NAME = "{constants.name}"
+NAME = "{shared.name}"
 ```
 
-Combine constant values with argument choices.
+Combine shared values with argument choices.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 name = "World"
 greetings = ["Hello", "Hi", "Hey"]
 
 [greet]
 args = [
-  { name = "greeting", enum = { ref = "constants.greetings" } },
+  { name = "greeting", enum = { ref = "shared.greetings" } },
 ]
 run = 'printf "%s, %s!\n" "$1" "$NAME"'
 
 [greet.env]
-NAME = "{constants.name}"
+NAME = "{shared.name}"
 ```
 
 Add hints and choose your shell.
 
 ```toml
-[constants]
+[shared]
+hidden = true
 name = "World"
 greetings = ["Hello", "Hi", "Hey"]
 
@@ -439,7 +446,7 @@ greetings = ["Hello", "Hi", "Hey"]
 hint = "Say hello with some personality"
 shell = "zsh"
 args = [
-  { name = "greeting", enum = { ref = "constants.greetings" } },
+  { name = "greeting", enum = { ref = "shared.greetings" } },
 ]
 run = '''
 printf '%s, %s!\n' "$1" "$NAME"
@@ -447,7 +454,7 @@ printf 'Have a lovely day!\n'
 '''
 
 [greet.env]
-NAME = "{constants.name}"
+NAME = "{shared.name}"
 ```
 
 ```sh
@@ -456,30 +463,152 @@ qrlkit greet Hey
 
 Supported shells: `bash`, `sh`, and `zsh`.
 
-### Shared constants
-
-Place `constants.toml` beside your state file.
+Use a script's output in another resource.
 
 ```toml
-# constants.toml
-[constants]
+[system]
+hidden = true
+
+[system.hostname]
+run = "hostname"
+
+[logs]
+url = "https://logs.example.com/search?host={system.hostname}"
+```
+
+Referenced scripts run only when needed. Their stdout is reused within the command,
+with trailing newlines removed. A failed script stops the command.
+Script bodies stay literal; use `args` and `env` to pass values.
+
+### Shared values
+
+Put shared values in any config and register it with `qrlkit add`.
+
+```toml
+# shared.toml
+[shared]
+hidden = true
 root = "~/dev"
 name = "World"
 ```
 
-Reference shared constants with `{global.name}` syntax.
+```sh
+qrlkit add shared.toml
+```
+
+Reference them from other registered configs.
 
 ```toml
 # QRLs.toml
 [dirs]
-project = "{global.root}/{repo}"
+project = "{shared.root}/{repo}"
 
 [greet]
 run = 'printf "Hello, %s!\n" "$NAME"'
 
 [greet.env]
-NAME = "{global.name}"
+NAME = "{shared.name}"
 ```
+
+`constants.toml` is no longer loaded automatically. Register shared values explicitly
+and replace `{global.name}` with their full path. `constants` is now an ordinary group.
+
+### Composition
+
+Reference another resource's target without opening it.
+
+```toml
+[shared]
+hidden = true
+repos = ["qrlkit-rs", "qrlkit-web"]
+
+[repos.open]
+url = "https://github.com/qrlkit/{shared.repos}"
+
+[repos.prs]
+url = "{repos.open}/pulls"
+```
+
+```sh
+repos prs qrlkit-web  # Opens the repository's pull requests
+repos prs            # Choose the repository
+```
+
+Missing references and circular dependencies are errors.
+
+### Lookups
+
+Choose a URL part from a mapping. Use one selector for a flat mapping,
+or multiple selectors to walk nested mappings.
+
+```toml
+[projects]
+hidden = true
+repos = ["qrlkit-rs", "qrlkit-web"]
+
+[shared]
+hidden = true
+environments = ["sim", "live"]
+
+[logs]
+url = "https://{logs.subdomains[projects.repos, shared.environments]}.logs.example.com"
+
+[logs.subdomains]
+hidden = true
+
+[logs.subdomains.qrlkit-rs]
+sim = "rust-sandbox"
+live = "rust-production"
+
+[logs.subdomains.qrlkit-web]
+sim = "web-sandbox"
+live = "web-production"
+```
+
+Put `url` directly on a group to call it without a subcommand.
+
+```sh
+logs qrlkit-rs live  # Opens https://rust-production.logs.example.com
+logs qrlkit-rs       # Choose the environment
+logs                 # Choose the repository and environment
+```
+
+Missing lookup keys are errors. Child commands take precedence over arguments;
+use `--` before a value that matches a child command's name.
+
+### Hints and hidden groups
+
+Hide a group from pickers with `hidden = true`. Its values can still be referenced
+or called directly. Add hints to groups, tools, lists, and individual choices.
+
+```toml
+[projects]
+hidden = true
+
+[projects.repos]
+hint = "Choose a qrlkit project"
+values = [
+  { value = "qrlkit-rs", hint = "Rust CLI" },
+  { value = "qrlkit-web", hint = "Documentation website" },
+]
+
+[repos]
+hint = "GitHub resources"
+
+[repos.open]
+hint = "Browse the repository"
+url = "https://github.com/qrlkit/{projects.repos}"
+```
+
+```sh
+repos open       # Choose a repository with hints
+projects repos   # Choose and print a value from the hidden group
+```
+
+Use `values = ["qrlkit-rs", "qrlkit-web"]` when only the list needs a hint.
+Each tool keeps its own hint when composing resources.
+
+See [examples/composition.toml](examples/composition.toml) for a complete config.
 
 ## Themes
 
