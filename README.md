@@ -395,36 +395,27 @@ NAME = "{shared.name}"
 Reference another resource's target without opening it.
 
 ```toml
-[repos.open]
-url = "https://github.com/qrlkit/qrlkit-rs"
+# Reference another QRL's value or URL
+url = "{project.home}/issues"
+```
 
+```toml
+# Use a script's output
 [branch]
 run = "git branch --show-current"
 
-[repos.compare]
-url = "{repos.open}/compare/main...{branch}"
-
-[release]
-hidden = true
-version = "0.12.0"
-os = ["linux", "macos"]
-arch = ["x64", "arm64"]
-
-[release.platforms.linux]
-x64 = "linux-x86_64"
-arm64 = "linux-aarch64"
-
-[release.platforms.macos]
-x64 = "macos-x86_64"
-arm64 = "macos-aarch64"
-
-[repos.download]
-url = "{repos.open}/releases/download/v{release.version}/qrlkit-{release.version}-{release.platforms[release.os, release.arch]}.tar.gz"
+[compare]
+url = "{project.home}/compare/main...{branch}"
 ```
 
-```sh
-repos compare               # Compare main with the current branch
-repos download macos arm64   # Download the macOS ARM64 release
+```toml
+# Look up a value using one selector
+url = "https://{hosts[project.environment]}.example.com"
+```
+
+```toml
+# Walk a nested mapping using multiple selectors
+url = "https://{hosts[project.name, project.environment]}.example.com"
 ```
 
 Missing references and circular dependencies are errors.
