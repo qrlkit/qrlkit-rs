@@ -410,11 +410,20 @@ url = "{project.home}/compare/main...{branch}"
 
 ```toml
 # Look up a value using one selector
+[project]
+environment = ["staging", "production"]
+
+[open]
 url = "https://{hosts[project.environment]}.example.com"
 ```
 
 ```toml
 # Walk a nested mapping using multiple selectors
+[project]
+name = ["api", "web"]
+environment = ["staging", "production"]
+
+[open]
 url = "https://{hosts[project.name, project.environment]}.example.com"
 ```
 
