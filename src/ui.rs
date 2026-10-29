@@ -106,7 +106,13 @@ fn background_style(color: Option<&str>) -> Style {
     }
 }
 
-fn option_line(option: &str, selected: bool, theme: &Theme, marker_width: usize) -> Line<'static> {
+fn option_line(
+    option: &str,
+    selected: bool,
+    theme: &Theme,
+    marker_width: usize,
+    key_width: usize,
+) -> Line<'static> {
     let marker = theme.marker();
     let width = Line::raw(marker).width();
     let prefix = if selected {
@@ -142,8 +148,9 @@ fn option_line(option: &str, selected: bool, theme: &Theme, marker_width: usize)
         Span::styled(key.to_owned(), row_style),
     ];
     if !hint.is_empty() {
+        let padding = key_width.saturating_sub(Line::raw(key).width()) + 8;
         spans.push(Span::styled(
-            format!("        {hint}"),
+            format!("{}{hint}", " ".repeat(padding)),
             row_style.patch(style(theme.hint.as_deref())),
         ));
     }
@@ -203,6 +210,18 @@ fn draw_prompt(frame: &mut ratatui::Frame, data: &PromptRequest, selected: usize
         .map(|theme| Line::raw(theme.marker()).width())
         .max()
         .unwrap_or(1);
+    // Include offscreen options so the hint column stays fixed while scrolling.
+    let key_width = data
+        .options
+        .iter()
+        .map(|option| {
+            let key = option
+                .split_once("        ")
+                .map_or(option.as_str(), |(key, _)| key);
+            Line::raw(key).width()
+        })
+        .max()
+        .unwrap_or(0);
     let rows = usize::from(area.height);
     let offset = selected.saturating_sub(rows.saturating_sub(1));
     for (row, (i, option)) in data
@@ -219,7 +238,7 @@ fn draw_prompt(frame: &mut ratatui::Frame, data: &PromptRequest, selected: usize
             data.row_themes.get(i).unwrap_or(theme)
         };
         let selected = i == selected;
-        let line = option_line(option, selected, row_theme, marker_width);
+        let line = option_line(option, selected, row_theme, marker_width, key_width);
         let mut paragraph = Paragraph::new(line);
         if selected && row_theme.selection_width.unwrap_or_default() == SelectionWidth::Row {
             paragraph = paragraph.style(background_style(Some(
@@ -508,8 +527,8 @@ mod tests {
             .draw(|frame| {
                 frame.render_widget(
                     Paragraph::new(vec![
-                        option_line("repo        My repository", true, &wide, 3),
-                        option_line("docs", false, &long, 3),
+                        option_line("repo        My repository", true, &wide, 3, 4),
+                        option_line("docs", false, &long, 3, 4),
                     ]),
                     frame.area(),
                 )
@@ -521,6 +540,92 @@ mod tests {
         assert_eq!(buffer[(4, 0)].fg, Color::Rgb(171, 205, 239));
         assert_eq!(buffer[(16, 0)].fg, Color::Rgb(17, 34, 51));
         assert_eq!(buffer[(4, 0)].bg, Color::Reset);
+    }
+
+    #[test]
+    fn hints_share_a_display_column_in_pickers_and_while_scrolling() {
+        use super::*;
+        use ratatui::{Terminal, backend::TestBackend};
+        for minimal in [true, false] {
+            for border in [Border::None, Border::Plain] {
+                let theme = Theme {
+                    border: Some(border),
+                    hint: Some("#112233".into()),
+                    ..Theme::default()
+                };
+                let data = PromptRequest {
+                    title: "Choose".into(),
+                    options: vec![
+                        key_label("longest-key", None),
+                        key_label("a", Some("Hint A")),
+                        key_label("界界界", Some("Hint B")),
+                        key_label("e\u{301}", Some("Hint C")),
+                        key_label("docs", Some("Hint D")),
+                    ],
+                    input: false,
+                    minimal,
+                    allow_empty: false,
+                    row_themes: vec![
+                        Theme {
+                            marker: Some("--x".into()),
+                            ..theme.clone()
+                        },
+                        Theme {
+                            marker: Some("界".into()),
+                            ..theme.clone()
+                        },
+                    ],
+                    theme,
+                    live_themes: vec![],
+                    initial_selection: 0,
+                };
+                let (left, top, extra_height) = if border != Border::None {
+                    (1, 1, 2)
+                } else if minimal {
+                    (0, 0, 0)
+                } else {
+                    (0, 1, 1)
+                };
+                // Three marker cells, one separator, eleven key cells, eight spaces.
+                let hint_x = left + 4 + 11 + 8;
+                for rows in [5, 2] {
+                    let mut terminal =
+                        Terminal::new(TestBackend::new(40, rows + extra_height)).unwrap();
+                    for selected in [0, 1, 4] {
+                        terminal
+                            .draw(|frame| draw_prompt(frame, &data, selected, ""))
+                            .unwrap();
+                        let buffer = terminal.backend().buffer();
+                        let offset = selected.saturating_sub(usize::from(rows - 1));
+                        for (row, index) in (offset..data.options.len())
+                            .take(usize::from(rows))
+                            .enumerate()
+                        {
+                            if index == 0 {
+                                continue;
+                            }
+                            let y = top + row as u16;
+                            assert_eq!(buffer[(hint_x - 1, y)].symbol(), " ");
+                            assert_eq!(buffer[(hint_x, y)].symbol(), "H");
+                            assert_eq!(buffer[(hint_x, y)].fg, Color::Rgb(17, 34, 51));
+                        }
+                    }
+                }
+                // A narrow terminal clips the aligned hints to the same row.
+                let mut terminal = Terminal::new(TestBackend::new(20, 5 + extra_height)).unwrap();
+                terminal
+                    .draw(|frame| draw_prompt(frame, &data, 1, ""))
+                    .unwrap();
+                assert!(
+                    terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .all(|cell| cell.symbol() != "H")
+                );
+            }
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::{store::Browser, ui};
 use anyhow::{Context, Result};
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -48,7 +48,7 @@ pub fn discover() -> Vec<Browser> {
             .map(|p| std::env::split_paths(&p).collect())
             .unwrap_or_default();
         paths.extend(["/usr/bin", "/usr/local/bin", "/snap/bin"].map(PathBuf::from));
-        for root in paths {
+        for root in &paths {
             for name in [
                 "firefox",
                 "google-chrome",
@@ -62,6 +62,113 @@ pub fn discover() -> Vec<Browser> {
             ] {
                 add(name, root.join(name));
             }
+        }
+        if is_wsl() {
+            let roots = windows_install_roots(Path::new("powershell.exe"), Path::new("wslpath"));
+            for browser in discover_windows(&paths, &roots) {
+                add(&browser.name, browser.executable);
+            }
+        }
+    }
+    found
+}
+
+fn is_wsl() -> bool {
+    cfg!(target_os = "linux")
+        && (std::env::var_os("WSL_DISTRO_NAME").is_some()
+            || std::env::var_os("WSL_INTEROP").is_some()
+            || std::fs::read_to_string("/proc/sys/kernel/osrelease")
+                .is_ok_and(|release| release.to_ascii_lowercase().contains("microsoft")))
+}
+
+fn windows_install_roots(powershell: &Path, wslpath: &Path) -> Vec<PathBuf> {
+    // Query Windows itself: the Windows user and drive mounts can differ from Linux.
+    let output = Command::new(powershell)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); \
+             [Environment]::GetFolderPath('ProgramFiles'); \
+             [Environment]::GetFolderPath('ProgramFilesX86'); \
+             $local = [Environment]::GetFolderPath('LocalApplicationData'); \
+             $local; if ($local) { Join-Path $local 'Programs' }",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return vec![];
+    };
+    if !output.status.success() {
+        return vec![];
+    }
+    let mut roots = vec![];
+    for path in String::from_utf8_lossy(&output.stdout).lines() {
+        if path.trim().is_empty() {
+            continue;
+        }
+        let output = Command::new(wslpath)
+            .args(["-u", path.trim()])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output();
+        if let Ok(output) = output
+            && output.status.success()
+            && let Ok(path) = String::from_utf8(output.stdout)
+            && !path.trim().is_empty()
+        {
+            roots.push(PathBuf::from(path.trim()));
+        }
+    }
+    roots
+}
+
+fn discover_windows(paths: &[PathBuf], roots: &[PathBuf]) -> Vec<Browser> {
+    let mut found = vec![];
+    let browsers = [
+        (
+            "Google Chrome",
+            "chrome.exe",
+            "Google/Chrome/Application/chrome.exe",
+        ),
+        (
+            "Microsoft Edge",
+            "msedge.exe",
+            "Microsoft/Edge/Application/msedge.exe",
+        ),
+        ("Firefox", "firefox.exe", "Mozilla Firefox/firefox.exe"),
+        (
+            "Brave",
+            "brave.exe",
+            "BraveSoftware/Brave-Browser/Application/brave.exe",
+        ),
+        ("Chromium", "chrome.exe", "Chromium/Application/chrome.exe"),
+        ("Vivaldi", "vivaldi.exe", "Vivaldi/Application/vivaldi.exe"),
+        ("Opera", "opera.exe", "Opera/launcher.exe"),
+    ];
+    let mut add = |name: &str, path: PathBuf| {
+        if path.is_file() && !found.iter().any(|b: &Browser| b.executable == path) {
+            found.push(Browser {
+                name: name.into(),
+                executable: path,
+                args: vec![],
+            });
+        }
+    };
+    // Check install folders first so Chromium's chrome.exe keeps its identity
+    // when it is also on PATH.
+    for (name, _, relative) in browsers {
+        for root in roots {
+            add(name, root.join(relative));
+        }
+    }
+    for (name, executable, _) in browsers {
+        if name == "Chromium" {
+            continue;
+        }
+        for root in paths {
+            add(name, root.join(executable));
         }
     }
     found
@@ -187,5 +294,103 @@ mod tests {
         let browser = resolve(path);
         assert_eq!(browser.executable, PathBuf::from(path));
         assert!(browser.args.is_empty());
+    }
+
+    #[test]
+    fn windows_browsers_are_found_in_path_and_system_and_user_installations() {
+        let dir = tempfile::tempdir().unwrap();
+        let system = dir.path().join("Program Files");
+        let system_x86 = dir.path().join("Program Files (x86)");
+        let user = dir.path().join("Users/Windows User/AppData/Local");
+        let programs = user.join("Programs");
+        let chrome = system.join("Google/Chrome/Application/chrome.exe");
+        let edge = system_x86.join("Microsoft/Edge/Application/msedge.exe");
+        let firefox = programs.join("Mozilla Firefox/firefox.exe");
+        let brave = user.join("BraveSoftware/Brave-Browser/Application/brave.exe");
+        let chromium = user.join("Chromium/Application/chrome.exe");
+        let vivaldi = user.join("Vivaldi/Application/vivaldi.exe");
+        let opera = programs.join("Opera/launcher.exe");
+        for path in [
+            &chrome, &edge, &firefox, &brave, &chromium, &vivaldi, &opera,
+        ] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let path_only = dir.path().join("custom browser");
+        std::fs::create_dir_all(path_only.join("firefox.exe")).unwrap(); // Not a file.
+        std::fs::write(path_only.join("vivaldi.exe"), "").unwrap();
+        let found = discover_windows(
+            &[
+                chrome.parent().unwrap().to_owned(),
+                chrome.parent().unwrap().to_owned(),
+                chromium.parent().unwrap().to_owned(),
+                path_only.clone(),
+            ],
+            &[system, system_x86, user, programs],
+        );
+        assert_eq!(found.len(), 8); // Chrome is also on PATH, but appears only once.
+        for (id, path) in [
+            ("chrome", chrome),
+            ("edge", edge),
+            ("firefox", firefox),
+            ("brave", brave),
+            ("chromium", chromium),
+            ("vivaldi", vivaldi),
+            ("opera", opera),
+            ("vivaldi", path_only.join("vivaldi.exe")),
+        ] {
+            let browser = found
+                .iter()
+                .find(|browser| browser.executable == path)
+                .unwrap();
+            assert_eq!(browser_id(&browser.name), id);
+            assert!(browser.args.is_empty());
+        }
+        assert!(discover_windows(&[], &[dir.path().join("missing")]).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn windows_roots_use_windows_folders_and_wsl_path_translation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let powershell = dir.path().join("powershell.exe");
+        let wslpath = dir.path().join("wslpath");
+        std::fs::write(
+            &powershell,
+            r#"#!/bin/sh
+printf '%s\r\n' 'C:\Program Files' 'D:\Program Files (x86)' 'C:\Users\Windows User\AppData\Local' 'C:\Users\Windows User\AppData\Local\Programs' ''
+"#,
+        )
+        .unwrap();
+        std::fs::write(&wslpath, r#"#!/bin/sh
+test "$1" = -u || exit 1
+case "$2" in
+  'C:\Program Files') printf '%s\n' '/custom/c/Program Files' ;;
+  'D:\Program Files (x86)') printf '%s\n' '/custom/d/Program Files (x86)' ;;
+  'C:\Users\Windows User\AppData\Local') printf '%s\n' '/custom/c/Users/Windows User/AppData/Local' ;;
+  'C:\Users\Windows User\AppData\Local\Programs') printf '%s\n' '/custom/c/Users/Windows User/AppData/Local/Programs' ;;
+  *) exit 1 ;;
+esac
+"#).unwrap();
+        for path in [&powershell, &wslpath] {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(
+            windows_install_roots(&powershell, &wslpath),
+            [
+                "/custom/c/Program Files",
+                "/custom/d/Program Files (x86)",
+                "/custom/c/Users/Windows User/AppData/Local",
+                "/custom/c/Users/Windows User/AppData/Local/Programs",
+            ]
+            .map(PathBuf::from)
+        );
+        let missing = dir.path().join("missing");
+        assert!(windows_install_roots(&missing, &wslpath).is_empty());
+        assert!(windows_install_roots(&powershell, &missing).is_empty());
+        std::fs::write(&powershell, "#!/bin/sh\nexit 1\n").unwrap();
+        assert!(windows_install_roots(&powershell, &wslpath).is_empty());
     }
 }
