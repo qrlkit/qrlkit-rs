@@ -1,3 +1,6 @@
+### 0.12.1
+- Allign hint indentation and fix browser install lookup on WSL
+
 ## 0.12.0
 - Breaking: remove constants syntax. Everything is now composeable and can be used as constants
 
