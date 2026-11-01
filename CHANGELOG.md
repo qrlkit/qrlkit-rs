@@ -1,3 +1,6 @@
+## 0.13.0
+- Group related info and reference them
+
 ### 0.12.1
 - Allign hint indentation and fix browser install lookup on WSL
 
