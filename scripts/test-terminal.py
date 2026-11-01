@@ -584,3 +584,51 @@ url = "{repos.open}/pulls"
     assert b"qrlkit-rs" in transcript
 
 print("Composition: hidden groups, group/choice hints, multi-selector prompts, shared selections, script caching, resource composition, and cancellation passed")
+
+with tempfile.TemporaryDirectory(prefix="qrl-record-argument-test-") as directory:
+    root = Path(directory)
+    source = root / "tools.toml"
+    source.write_text('''
+[projects]
+hidden = true
+hint = "Choose a project"
+[projects.alpha]
+hint = "Alpha project"
+org = "acme"
+repo = "alpha"
+[projects.beta]
+hint = "Beta project"
+org = "example"
+repo = "beta"
+[browse]
+args = [
+    { name = "project", enum = { ref = "projects" } },
+    { name = "section", enum = ["overview", "files", "issues", "pulls"] },
+]
+url = "https://example.com/{project.org}/{project.repo}/{section}?project={project}"
+''')
+    (root / "state.yaml").write_text(json.dumps({
+        "version": 1,
+        "browser": {"name": "Test", "executable": "/bin/echo"},
+        "sources": [],
+    }))
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+        env=env, capture_output=True, check=True,
+    )
+    transcript = run_interactive(root, [
+        ("beta        Beta project", b"\x1b[B\r"),
+        ("section:", b"\x1b[B" * 3 + b"\r"),
+    ], command=("browse",), verify_terminal=True)
+    assert b"qrlkit: open https://example.com/example/beta/pulls?project=beta" in transcript, transcript
+    transcript = run_interactive(root, [
+        ("section:", b"\x1b[B" * 2 + b"\r"),
+    ], command=("browse", "alpha"), verify_terminal=True)
+    assert b"qrlkit: open https://example.com/acme/alpha/issues?project=alpha" in transcript, transcript
+    for command, prompt in [(("browse",), "Choose a project"), (("browse", "alpha"), "section:")]:
+        transcript = run_interactive(root, [(prompt, b"\x1b")], success=False,
+                                     command=command, verify_terminal=True)
+        assert b"qrlkit: open " not in transcript, transcript
+
+print("Record arguments: project hints, field selection, partial input, and cancellation passed")

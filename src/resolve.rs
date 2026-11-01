@@ -60,17 +60,56 @@ fn free_id(entry: &Entry, name: &str) -> String {
 fn argument_input(state: &State, entry: &Entry, argument: &Argument) -> Result<Input> {
     if let Some(name) = &argument.reference {
         let Expression::Path(path) = template::expression(name)? else {
-            bail!("Argument references must name a list: {name}");
+            bail!("Argument references must name a list or record group: {name}");
         };
         let key = reference(state, entry, &path);
-        let target = state
-            .lookup(&key)
-            .with_context(|| format!("Unknown reference: {name}"))?;
-        ensure!(
-            target.choices.is_some(),
-            "Argument reference {name} must name a list"
-        );
-        let mut input = input_for(target);
+        let mut input = if let Ok(target) = state.lookup(&key) {
+            ensure!(
+                target.choices.is_some(),
+                "Argument reference {name} must name a list or record group"
+            );
+            input_for(target)
+        } else {
+            // Include empty groups so malformed records cannot silently disappear
+            // from the choices inferred from their fields.
+            let children = state
+                .children(&key)
+                .into_iter()
+                .chain(
+                    state
+                        .sources
+                        .iter()
+                        .flat_map(|source| &source.groups)
+                        .filter(|group| {
+                            group.key.starts_with(&key) && group.key.len() == key.len() + 1
+                        })
+                        .map(|group| group.key[key.len()].clone()),
+                )
+                .collect::<BTreeSet<_>>();
+            ensure!(
+                !children.is_empty(),
+                "Argument reference {name} must name a nonempty list or record group"
+            );
+            let mut choices = vec![];
+            let mut choice_hints = vec![];
+            for child in children {
+                let mut record = key.clone();
+                record.push(child.clone());
+                ensure!(
+                    state.lookup(&record).is_err() && state.contains(&record),
+                    "Argument reference {name}: {} must be a nonempty record",
+                    record.join(".")
+                );
+                choices.push(child);
+                choice_hints.push(state.hint(&record).map(str::to_owned));
+            }
+            Argument {
+                hint: state.hint(&key).map(str::to_owned),
+                choices: Some(choices),
+                choice_hints,
+                ..Default::default()
+            }
+        };
         input.name = argument.name.clone();
         Ok(Input {
             id: key.join(" "),
@@ -89,6 +128,76 @@ fn arguments(entry: &Entry) -> Option<&[Argument]> {
         .script
         .as_ref()
         .map_or(entry.args.as_deref(), |script| script.args.as_deref())
+}
+
+/// Bind argument field access to the existing lookup evaluator. For example,
+/// project.org selects projects[project, "org"], with a fixed final key.
+fn expression(state: &State, entry: &Entry, text: &str) -> Result<Expression> {
+    fn bind(state: &State, entry: &Entry, expr: Expression) -> Result<Expression> {
+        match expr {
+            Expression::Path(path) => {
+                let Some(argument) = arguments(entry)
+                    .and_then(|args| args.iter().find(|arg| arg.name == path[0]))
+                    .filter(|_| path.len() > 1)
+                else {
+                    return Ok(Expression::Path(path));
+                };
+                let name = argument.reference.as_deref().with_context(|| {
+                    format!(
+                        "Argument {} needs a record reference to access fields",
+                        argument.name
+                    )
+                })?;
+                let Expression::Path(root) = template::expression(name)? else {
+                    bail!("Argument references must name a list or record group: {name}");
+                };
+                let key = reference(state, entry, &root);
+                ensure!(
+                    state.lookup(&key).is_err(),
+                    "Argument {} needs a record group to access fields",
+                    argument.name
+                );
+                let input = argument_input(state, entry, argument)?;
+                for choice in input.argument.choices.as_ref().unwrap() {
+                    let target = key
+                        .iter()
+                        .cloned()
+                        .chain(std::iter::once(choice.clone()))
+                        .chain(path[1..].iter().cloned())
+                        .collect::<Vec<_>>();
+                    ensure!(
+                        state.contains(&target),
+                        "Missing record field: {} (argument {})",
+                        target.join("."),
+                        argument.name
+                    );
+                }
+                let selectors = std::iter::once(Expression::Path(vec![argument.name.clone()]))
+                    .chain(path[1..].iter().cloned().map(Expression::Key))
+                    .collect();
+                Ok(Expression::Lookup(
+                    Box::new(Expression::Path(root)),
+                    selectors,
+                ))
+            }
+            Expression::Lookup(base, selectors) => {
+                let base = bind(state, entry, *base)?;
+                let selectors = selectors
+                    .into_iter()
+                    .map(|selector| bind(state, entry, selector))
+                    .collect::<Result<Vec<_>>>()?;
+                // A record field can itself be a mapping, e.g. service.hosts[env].
+                if let Expression::Lookup(root, mut fields) = base {
+                    fields.extend(selectors);
+                    Ok(Expression::Lookup(root, fields))
+                } else {
+                    Ok(Expression::Lookup(Box::new(base), selectors))
+                }
+            }
+            Expression::Key(_) => Ok(expr),
+        }
+    }
+    bind(state, entry, template::expression(text)?)
 }
 
 struct Plan<'a> {
@@ -167,13 +276,14 @@ impl<'a> Plan<'a> {
 
     fn text(&mut self, entry: &Entry, text: &str) -> Result<()> {
         for name in template::names(text)? {
-            self.expr(entry, &template::expression(&name)?)?;
+            self.expr(entry, &expression(self.state, entry, &name)?)?;
         }
         Ok(())
     }
 
     fn expr(&mut self, entry: &Entry, expr: &Expression) -> Result<()> {
         match expr {
+            Expression::Key(_) => Ok(()),
             Expression::Path(path) => {
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
@@ -263,6 +373,7 @@ impl<'a> Plan<'a> {
         active: &mut BTreeSet<Vec<String>>,
     ) -> Result<Option<String>> {
         match expr {
+            Expression::Key(key) => Ok(Some(key.clone())),
             Expression::Path(path) => {
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
@@ -310,7 +421,7 @@ impl<'a> Plan<'a> {
                         let end = rest[start..].find('}').unwrap() + start;
                         let Some(value) = self.known(
                             target,
-                            &template::expression(&rest[start + 1..end])?,
+                            &expression(self.state, target, &rest[start + 1..end])?,
                             active,
                         )?
                         else {
@@ -523,6 +634,11 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
 
     fn preview_expr(&mut self, entry: &Entry, expr: &Expression) -> Result<Option<Value>> {
         match expr {
+            Expression::Key(key) => Ok(Some(Value {
+                text: key.clone(),
+                raw: true,
+                parts: vec![],
+            })),
             Expression::Path(path) => {
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
@@ -590,9 +706,10 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
                 parts: vec![],
             });
             let end = rest[start..].find('}').context("Unclosed reference")? + start;
-            if let Some(value) =
-                self.preview_expr(entry, &template::expression(&rest[start + 1..end])?)?
-            {
+            if let Some(value) = self.preview_expr(
+                entry,
+                &expression(self.state, entry, &rest[start + 1..end])?,
+            )? {
                 parts.push(value);
             } else {
                 unknown = true;
@@ -649,6 +766,11 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
 
     fn expr(&mut self, entry: &Entry, expr: &Expression) -> Result<Value> {
         match expr {
+            Expression::Key(key) => Ok(Value {
+                text: key.clone(),
+                raw: true,
+                parts: vec![],
+            }),
             Expression::Path(path) => {
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
@@ -705,7 +827,10 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
                 parts: vec![],
             });
             let end = rest[start..].find('}').context("Unclosed reference")? + start;
-            parts.push(self.expr(entry, &template::expression(&rest[start + 1..end])?)?);
+            parts.push(self.expr(
+                entry,
+                &expression(self.state, entry, &rest[start + 1..end])?,
+            )?);
             rest = &rest[end + 1..];
         }
         parts.push(Value {
@@ -983,6 +1108,123 @@ args=[{name='query'},{name='id',enum=['a &b']}]
         assert_eq!(
             result.value,
             "chrome://extensions/?id=a%20%26b&query=hello%20world&again=a%20%26b"
+        );
+    }
+
+    #[test]
+    fn record_prompts_reuse_selection_and_only_capture_the_selected_fields() {
+        let (dir, state) = fixture(
+            r#"
+[projects]
+hidden=true
+hint='Choose a project'
+[projects.alpha]
+hint='Alpha project'
+[projects.alpha.org]
+run='printf projects; printf alpha >> captured'
+[projects.beta]
+hint='Beta project'
+[projects.beta.org]
+run='printf example; printf beta >> captured'
+[browse]
+args=[{name='project',enum={ref='projects'}},{name='section',enum=['overview','files','issues','pulls']}]
+url='https://example.com/{section}/{project.org}?project={project}&again={project.org}'
+"#,
+        );
+        let browse = entry(&state, &["browse"]);
+        let mut asked = vec![];
+        let result = evaluate(&state, browse, &[], |argument| {
+            asked.push(argument.name.clone());
+            if argument.name == "project" {
+                assert_eq!(argument.hint.as_deref(), Some("Choose a project"));
+                assert_eq!(argument.choices.as_ref().unwrap(), &["alpha", "beta"]);
+                assert_eq!(
+                    argument.choice_hints,
+                    [Some("Alpha project".into()), Some("Beta project".into())]
+                );
+                Ok("beta".into())
+            } else {
+                assert!(!dir.path().join("captured").exists());
+                Ok("pulls".into())
+            }
+        })
+        .unwrap();
+        assert_eq!(asked, ["project", "section"]);
+        assert_eq!(
+            result.value,
+            "https://example.com/pulls/example?project=beta&again=example"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("captured")).unwrap(),
+            "beta"
+        );
+        fs::remove_file(dir.path().join("captured")).unwrap();
+
+        let result = evaluate(&state, browse, &["alpha".into()], |argument| {
+            assert_eq!(argument.name, "section");
+            bail!("cancelled")
+        });
+        assert!(result.is_err());
+        assert!(!dir.path().join("captured").exists());
+        assert!(
+            evaluate(&state, browse, &["alpha".into(), "invalid".into()], |_| {
+                panic!("invalid input must be rejected before prompts")
+            })
+            .is_err()
+        );
+        assert!(!dir.path().join("captured").exists());
+    }
+
+    #[test]
+    fn record_fields_support_nested_paths_mappings_and_lookup_selectors() {
+        let (_dir, state) = fixture(
+            r#"
+[projects.alpha.routing]
+cluster='east'
+[projects.alpha.routing.paths]
+issues='sandbox'
+pulls='production'
+[hosts]
+east='east.example.com'
+[browse]
+args=[{name='project',enum={ref='projects'}},{name='section',enum=['issues','pulls']}]
+url='https://{hosts[project.routing.cluster]}/{project.routing.paths[section]}'
+"#,
+        );
+        let result = evaluate(
+            &state,
+            entry(&state, &["browse"]),
+            &["alpha".into(), "issues".into()],
+            |_| panic!("unexpected prompt"),
+        )
+        .unwrap();
+        assert_eq!(result.value, "https://east.example.com/sandbox");
+    }
+
+    #[test]
+    fn script_arguments_can_use_record_fields_in_their_environment() {
+        let (_dir, state) = fixture(
+            r#"
+[projects.alpha]
+org='projects'
+repo='alpha-repo'
+[show]
+args=[{name='project',enum={ref='projects'}}]
+run='printf "%s:%s:%s" "$1" "$ORG" "$REPO"'
+[show.env]
+ORG='{project.org}'
+REPO='{project.repo}'
+[open]
+url='https://example.com/{show}'
+"#,
+        );
+        let result = evaluate(&state, entry(&state, &["open"]), &["alpha".into()], |_| {
+            panic!("unexpected prompt")
+        })
+        .unwrap();
+        assert_eq!(
+            result.value,
+            "https://example.com/alpha%3Aprojects%3Aalpha-repo"
         );
     }
 }
