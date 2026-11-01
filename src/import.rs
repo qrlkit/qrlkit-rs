@@ -288,7 +288,7 @@ impl Importer<'_> {
                     });
                 }
                 ensure!(
-                    run.is_some() || url.is_some() || !table.contains_key("args"),
+                    key.is_empty() || run.is_some() || url.is_some() || !table.contains_key("args"),
                     "args requires run or url"
                 );
                 for (segment, child) in table {
@@ -301,11 +301,11 @@ impl Importer<'_> {
                             | "url"
                             | "shell"
                             | "env"
-                            | "args"
                             | "browser"
                             | "filehook"
                             | "dirhook"
-                    ) {
+                    ) || (segment == "args" && !key.is_empty())
+                    {
                         continue;
                     }
                     ensure!(valid_segment(segment), "Invalid key segment: {segment:?}");

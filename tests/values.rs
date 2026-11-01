@@ -501,6 +501,219 @@ fn resource_arguments_and_hints_work_across_formats() {
 }
 
 #[test]
+fn root_args_namespace_supports_argument_references_and_multiple_lookup_selectors() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = fixture();
+        let root = dir.path();
+        let config = json!({
+            "args": {
+                "hidden": true,
+                "floors": ["1", "2"], "apartment": ["a", "b"],
+                "project": ["docs", "status"], "environment": ["preview", "production"]
+            },
+            "ding": {
+                "url": "https://ding-a.door/{floor}/{apartment}",
+                "args": [
+                    {"name": "floor", "enum": {"ref": "args.floors"}},
+                    {"name": "apartment", "enum": {"ref": "args.apartment"}}
+                ]
+            },
+            "hosts": {
+                "docs": {"preview": "docs-preview.example.com", "production": "docs.example.com"},
+                "status": {"preview": "status-preview.example.com", "production": "status.example.com"}
+            },
+            "site": {"url": "https://{hosts[args.project, args.environment]}"}
+        });
+        let text = match extension {
+            "toml" => toml::to_string(&config).unwrap(),
+            "yaml" => serde_yaml_ng::to_string(&config).unwrap(),
+            _ => config.to_string(),
+        };
+        let name = format!("tools.{extension}");
+        fs::write(root.join(&name), text).unwrap();
+        success(root, &["add", &name]);
+        success(root, &["reload"]);
+        assert_eq!(output(root, &["ding", "2", "b"]), "https://ding-a.door/2/b");
+        for (project, environment, host) in [
+            ("docs", "preview", "docs-preview.example.com"),
+            ("docs", "production", "docs.example.com"),
+            ("status", "preview", "status-preview.example.com"),
+            ("status", "production", "status.example.com"),
+        ] {
+            assert_eq!(
+                output(root, &["site", project, environment]),
+                format!("https://{host}")
+            );
+        }
+    }
+}
+
+#[test]
+fn record_arguments_select_fields_and_keys_across_formats_and_reload() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = fixture();
+        let root = dir.path();
+        let config = json!({
+            "projects": {"hidden": true,
+                "alpha": {"repo": "alpha-repo", "org": "projects"},
+                "beta": {"repo": "beta-repo", "org": "example"}
+            },
+            "browse": {
+                "args": [
+                    {"name": "project", "enum": {"ref": "projects"}},
+                    {"name": "section", "enum": ["overview", "files", "issues", "pulls"]}
+                ],
+                // Declared argument order applies even when section occurs first.
+                "url": "https://example.com/{section}/orgs/{project.org}?repo={project.repo}&project={project}&again={project.org}"
+            }
+        });
+        let text = match extension {
+            "toml" => toml::to_string(&config).unwrap(),
+            "yaml" => serde_yaml_ng::to_string(&config).unwrap(),
+            _ => config.to_string(),
+        };
+        let name = format!("tools.{extension}");
+        fs::write(root.join(&name), text).unwrap();
+        success(root, &["add", &name]);
+        success(root, &["reload"]);
+        for section in ["overview", "files", "issues", "pulls"] {
+            for (project, org, repo) in [
+                ("alpha", "projects", "alpha-repo"),
+                ("beta", "example", "beta-repo"),
+            ] {
+                assert_eq!(
+                    output(root, &["browse", project, section]),
+                    format!(
+                        "https://example.com/{section}/orgs/{org}?repo={repo}&project={project}&again={org}"
+                    ),
+                    "{extension}"
+                );
+            }
+        }
+        for args in [
+            vec!["browse", "missing", "pulls"],
+            vec!["browse", "alpha", "production"],
+            vec!["browse", "alpha", "pulls", "extra"],
+        ] {
+            assert!(!run(root, &args).status.success(), "{extension}: {args:?}");
+        }
+    }
+}
+
+#[test]
+fn record_field_arguments_work_without_a_bare_argument_placeholder() {
+    let dir = fixture();
+    let root = dir.path();
+    import(
+        root,
+        r#"
+[projects]
+hidden=true
+[projects."alpha.project/&"]
+org='projects'
+[open]
+args=[{name='project',enum={ref='projects'}}]
+url='https://example.com/{project.org}?name={project}'
+[org]
+args=[{name='project',enum={ref='projects'}}]
+url='https://example.com/{project.org}'
+"#,
+    );
+    assert_eq!(
+        output(root, &["open", "alpha.project/&"]),
+        "https://example.com/projects?name=alpha.project%2F%26"
+    );
+    assert_eq!(
+        output(root, &["org", "alpha.project/&"]),
+        "https://example.com/projects"
+    );
+}
+
+#[test]
+fn malformed_record_arguments_fail_atomically_without_running_dependencies() {
+    let dir = fixture();
+    let root = dir.path();
+    import(root, "[task]\nrun='true'\n");
+    let before = fs::read(root.join("state.yaml")).unwrap();
+    for records in [
+        "[projects]\nalpha='scalar'",
+        "[projects]\nvalues=['alpha']",
+        "[projects]\n[projects.alpha]",
+        "[projects.alpha]\norg='one'\n[projects.empty]",
+        "[projects.alpha]\norg='one'\n[projects.other]\nrepo='missing-org'",
+        "[projects]\nscalar='mixed'\n[projects.alpha]\norg='one'",
+    ] {
+        fs::write(
+            root.join("tools.toml"),
+            format!(
+                "{records}\n[dynamic]\nrun='touch ran; printf host'\n[browse]\nargs=[{{name='project',enum={{ref='projects'}}}}]\nurl='https://{{dynamic}}.example.com/{{project.org}}'\n"
+            ),
+        )
+        .unwrap();
+        assert!(!run(root, &["reload"]).status.success(), "{records}");
+        assert_eq!(before, fs::read(root.join("state.yaml")).unwrap());
+        assert!(!root.join("ran").exists());
+    }
+}
+
+#[test]
+fn record_references_work_across_files_and_follow_local_namespace_renames() {
+    let dir = fixture();
+    let root = dir.path();
+    let configs = root.join("configs");
+    fs::create_dir(&configs).unwrap();
+    fs::write(
+        configs.join("action.toml"),
+        "[browse]\nargs=[{name='project',enum={ref='projects'}}]\nurl='https://example.com/{project.org}?project={project}'\n",
+    )
+    .unwrap();
+    fs::write(
+        configs.join("records.toml"),
+        "[projects]\nhidden=true\n[projects.alpha]\norg='projects'\n[local]\nargs=[{name='project',enum={ref='projects'}}]\nurl='https://local.example.com/{project.org}'\n",
+    )
+    .unwrap();
+    success(root, &["add", "configs"]);
+    assert_eq!(
+        output(root, &["browse", "alpha"]),
+        "https://example.com/projects?project=alpha"
+    );
+    // Preserve the record source's local references when its namespace is renamed.
+    let mut state: serde_json::Value =
+        serde_yaml_ng::from_str(&fs::read_to_string(root.join("state.yaml")).unwrap()).unwrap();
+    let source = &mut state["sources"][1];
+    source["renames"]["projects"] = json!("renamed-projects");
+    for collection in ["entries", "groups"] {
+        for node in source[collection].as_array_mut().unwrap() {
+            if node["key"][0] == "projects" {
+                node["key"][0] = json!("renamed-projects");
+            }
+        }
+    }
+    // The other file explicitly uses the newly exposed shared namespace.
+    let action = configs.join("action.toml");
+    fs::write(
+        &action,
+        fs::read_to_string(&action)
+            .unwrap()
+            .replace("ref='projects'", "ref='renamed-projects'"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("state.yaml"),
+        serde_yaml_ng::to_string(&state).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        output(root, &["local", "alpha"]),
+        "https://local.example.com/projects"
+    );
+    assert_eq!(
+        output(root, &["browse", "alpha"]),
+        "https://example.com/projects?project=alpha"
+    );
+}
+
+#[test]
 fn declared_empty_arguments_reject_inputs_while_legacy_scripts_accept_them() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

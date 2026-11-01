@@ -4,6 +4,8 @@ use anyhow::{Result, ensure};
 pub enum Expression {
     Path(Vec<String>),
     Lookup(Box<Expression>, Vec<Expression>),
+    /// A fixed lookup key generated when binding a selected record's fields.
+    Key(String),
 }
 
 pub fn valid_name(name: &str) -> bool {
@@ -106,12 +108,36 @@ pub fn validate_target(target: &str) -> Result<()> {
 
 /// Declarations cover each distinct placeholder; their order controls CLI arguments.
 pub fn validate_arguments(template: &str, args: Option<&[crate::script::Argument]>) -> Result<()> {
-    let names = names(template)?
-        .into_iter()
-        .filter(|name| valid_name(name))
-        .collect::<Vec<_>>();
+    let placeholders = names(template)?;
     crate::script::validate_arguments(args)?;
     if let Some(args) = args {
+        fn collect(
+            expr: &Expression,
+            args: &[crate::script::Argument],
+            names: &mut std::collections::BTreeSet<String>,
+        ) {
+            match expr {
+                Expression::Path(path) => {
+                    if args.iter().any(|arg| arg.name == path[0]) {
+                        names.insert(path[0].clone());
+                    }
+                }
+                Expression::Lookup(base, selectors) => {
+                    collect(base, args, names);
+                    for selector in selectors {
+                        collect(selector, args, names);
+                    }
+                }
+                Expression::Key(_) => {}
+            }
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for name in placeholders {
+            if valid_name(&name) {
+                names.insert(name.clone());
+            }
+            collect(&expression(&name)?, args, &mut names);
+        }
         ensure!(
             args.len() == names.len() && args.iter().all(|arg| names.contains(&arg.name)),
             "Resource args must declare each placeholder exactly once"

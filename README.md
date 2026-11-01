@@ -392,42 +392,56 @@ NAME = "{shared.name}"
 
 ### Composition
 
-Reference another resource's target without opening it.
+`qrlkit` offers a few ways to compose one QRL from multiple others. First principle is that everything is callable and referenceable if its not `hidden = true`.
+
+** One QRL calls another**
+```
+[qrl-1]
+url = "https:/..."
+
+[qrl-1.qrl-2]
+run = 'echo "sub/path"'
+
+[qrl-3]
+url = "{qrl-1}/{qrl-1.qrl-2}"
+```
+Not here its possible to chain keys with a dot like `objs.fruits.apples`. 
+
+** Group static fields and ref them**
 
 ```toml
-# Reference another QRL's value or URL
-url = "{project.home}/issues"
+[args]
+floors = ["1", "2", "3"]
+apartment = ["a", "b", "c"]
+
+[ding]
+url = "https://ding-a.door/{floor}/{apartment}"
+args = [
+  { name = "floor", enum = { ref = "args.floors" } },
+  { name = "apartment", enum = { ref = "args.apartment" } },
+]
 ```
+
+**Dynamically look up keys**
 
 ```toml
-# Use a script's output
-[branch]
-run = "git branch --show-current"
+[args]
+project = ["docs", "status"]
+environment = ["staging", "prod"]
 
-[compare]
-url = "{project.home}/compare/main...{branch}"
+[domains.docs]
+staging = "docs-staging.example.com"
+prod = "docs.example.com"
+
+[domains.status]
+staging = "status-staging.example.com"
+prod = "status.example.com"
+
+[site]
+url = "https://{domains[args.project, args.environment]}"
 ```
 
-```toml
-# Look up a value using one selector
-[project]
-environment = ["staging", "production"]
-
-[open]
-url = "https://{hosts[project.environment]}.example.com"
-```
-
-```toml
-# Walk a nested mapping using multiple selectors
-[project]
-name = ["api", "web"]
-environment = ["staging", "production"]
-
-[open]
-url = "https://{hosts[project.name, project.environment]}.example.com"
-```
-
-Missing references and circular dependencies are errors.
+Here `domains[args.project, args.environment]` resolves by first prompting for project (`docs` or `status`) and then use that to select either `[domains.docs]` or `[domains.status]`  and prompt for a environment (`staging` or `prod`). 
 
 ### Hints and hidden groups
 
