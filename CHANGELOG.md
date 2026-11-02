@@ -1,3 +1,6 @@
+## 0.15.0
+- Use templates
+
 ## 0.14.0
 - Add support for multiple choice
 
