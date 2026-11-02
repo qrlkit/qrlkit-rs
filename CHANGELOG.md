@@ -1,3 +1,6 @@
+## 0.14.0
+- Add support for multiple choice
+
 ## 0.13.0
 - Group related info and reference them
 

@@ -50,6 +50,7 @@ pub fn print_theme_preview(theme: &Theme) -> Result<()> {
             "issues        Browse issues".into(),
         ],
         input: false,
+        multiple: false,
         minimal: true,
         allow_empty: false,
         theme: theme.clone(),
@@ -158,12 +159,27 @@ fn option_line(
 }
 
 fn draw_prompt(frame: &mut ratatui::Frame, data: &PromptRequest, selected: usize, text: &str) {
+    draw_prompt_checked(frame, data, selected, text, &[]);
+}
+
+fn draw_prompt_checked(
+    frame: &mut ratatui::Frame,
+    data: &PromptRequest,
+    selected: usize,
+    text: &str,
+    checked: &[bool],
+) {
     let live = !data.live_themes.is_empty();
     let theme = data.live_themes.get(selected).unwrap_or(&data.theme);
     let title = if live {
         format!(
             "Choose theme: {} (Enter saves, Esc cancels)",
             data.options[selected]
+        )
+    } else if data.multiple {
+        format!(
+            "{} (Space toggles, Enter confirms 1+, Esc cancels)",
+            data.title
         )
     } else {
         data.title.clone()
@@ -221,7 +237,8 @@ fn draw_prompt(frame: &mut ratatui::Frame, data: &PromptRequest, selected: usize
             Line::raw(key).width()
         })
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        + if data.multiple { 4 } else { 0 };
     let rows = usize::from(area.height);
     let offset = selected.saturating_sub(rows.saturating_sub(1));
     for (row, (i, option)) in data
@@ -238,7 +255,19 @@ fn draw_prompt(frame: &mut ratatui::Frame, data: &PromptRequest, selected: usize
             data.row_themes.get(i).unwrap_or(theme)
         };
         let selected = i == selected;
-        let line = option_line(option, selected, row_theme, marker_width, key_width);
+        let option = if data.multiple {
+            format!(
+                "[{}] {option}",
+                if checked.get(i) == Some(&true) {
+                    'x'
+                } else {
+                    ' '
+                }
+            )
+        } else {
+            option.clone()
+        };
+        let line = option_line(&option, selected, row_theme, marker_width, key_width);
         let mut paragraph = Paragraph::new(line);
         if selected && row_theme.selection_width.unwrap_or_default() == SelectionWidth::Row {
             paragraph = paragraph.style(background_style(Some(
@@ -322,11 +351,12 @@ fn render_prompt(data: &PromptRequest) -> Result<String> {
         },
     )?;
     let mut selected = data.initial_selection;
+    let mut checked = vec![false; options.len()];
     let mut text = String::new();
     let result = loop {
         terminal.draw(|frame| {
             restore.origin = Some(frame.area().as_position());
-            draw_prompt(frame, data, selected, &text);
+            draw_prompt_checked(frame, data, selected, &text, &checked);
         })?;
         if let Event::Key(key) = event::read()? {
             if key.kind != KeyEventKind::Press {
@@ -345,7 +375,18 @@ fn render_prompt(data: &PromptRequest) -> Result<String> {
                 KeyCode::Enter if input && (allow_empty || !text.trim().is_empty()) => {
                     break Some(text.trim().into());
                 }
+                KeyCode::Enter if data.multiple => {
+                    let indices = checked
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, checked)| checked.then_some(index))
+                        .collect::<Vec<_>>();
+                    if !indices.is_empty() {
+                        break Some(serde_json::to_string(&indices)?);
+                    }
+                }
                 KeyCode::Enter if !input => break Some(selected.to_string()),
+                KeyCode::Char(' ') if data.multiple => checked[selected] = !checked[selected],
                 KeyCode::Up | KeyCode::Char('k') if !input => {
                     selected = selected.saturating_sub(1);
                 }
@@ -378,6 +419,7 @@ mod tests {
             title: "Choose theme".into(),
             options: vec!["terminal".into(), "personal".into()],
             input: false,
+            multiple: false,
             minimal: false,
             allow_empty: false,
             theme: Theme {
@@ -464,6 +506,7 @@ mod tests {
                 title: "gh".into(),
                 options: vec!["repo        Hint".into(), "docs".into()],
                 input: false,
+                multiple: false,
                 minimal: true,
                 allow_empty: false,
                 theme,
@@ -563,6 +606,7 @@ mod tests {
                         key_label("docs", Some("Hint D")),
                     ],
                     input: false,
+                    multiple: false,
                     minimal,
                     allow_empty: false,
                     row_themes: vec![
@@ -643,6 +687,7 @@ mod tests {
                 title: "gh".into(),
                 options: vec!["home".into(), "issues".into(), "repo".into()],
                 input: false,
+                multiple: false,
                 minimal: true,
                 allow_empty: false,
                 theme: Theme {
@@ -688,6 +733,66 @@ mod tests {
     }
 
     #[test]
+    fn multiple_picker_renders_checks_hints_and_scrolling_with_the_active_theme() {
+        use super::*;
+        use ratatui::{Terminal, backend::TestBackend};
+        for border in [Border::None, Border::Rounded] {
+            let data = PromptRequest {
+                title: "regions:".into(),
+                options: vec![
+                    key_label("eu", Some("Europe")),
+                    "us".into(),
+                    key_label("asia", Some("Asia")),
+                ],
+                input: false,
+                multiple: true,
+                minimal: false,
+                allow_empty: false,
+                theme: Theme {
+                    border: Some(border),
+                    selected: Some("#123456".into()),
+                    ..Default::default()
+                },
+                row_themes: vec![],
+                live_themes: vec![],
+                initial_selection: 0,
+            };
+            let mut terminal = Terminal::new(TestBackend::new(80, 5)).unwrap();
+            terminal
+                .draw(|frame| draw_prompt_checked(frame, &data, 2, "", &[true, false, true]))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("Space toggles"));
+            assert!(text.contains("[x] eu"));
+            assert!(text.contains("[ ] us"));
+            assert!(text.contains("[x] asia"));
+            assert!(text.contains("Europe") && text.contains("Asia"));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|cell| cell.fg == Color::Rgb(0x12, 0x34, 0x56) && cell.symbol() == "x")
+            );
+            let mut tiny = Terminal::new(TestBackend::new(16, 3)).unwrap();
+            tiny.draw(|frame| draw_prompt_checked(frame, &data, 2, "", &[true, false, true]))
+                .unwrap();
+            let text = tiny
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("[x] asia"));
+        }
+    }
+
+    #[test]
     fn picker_height_includes_every_option() {
         assert_eq!(prompt_height(0, false, true), 1);
         assert_eq!(prompt_height(7, false, true), 7);
@@ -701,6 +806,8 @@ struct PromptRequest {
     title: String,
     options: Vec<String>,
     input: bool,
+    #[serde(default)]
+    multiple: bool,
     minimal: bool,
     #[serde(default)]
     allow_empty: bool,
@@ -729,6 +836,7 @@ fn prompt(
         title: title.into(),
         options: options.to_vec(),
         input,
+        multiple: false,
         minimal,
         allow_empty,
         theme: THEME.with(|theme| theme.borrow().clone()),
@@ -779,6 +887,10 @@ pub fn run_prompt(request: &std::path::Path, response: &std::path::Path) -> Resu
         data.input || !data.options.is_empty(),
         "No options available"
     );
+    ensure!(
+        !data.multiple || (!data.input && data.live_themes.is_empty()),
+        "Multiple selection requires an option picker"
+    );
     let result = render_prompt(&data).map_err(|error| error.to_string());
     std::fs::write(response, serde_yaml_ng::to_string(&result)?)?;
     Ok(())
@@ -787,6 +899,30 @@ pub fn run_prompt(request: &std::path::Path, response: &std::path::Path) -> Resu
 pub fn select(title: &str, options: &[String]) -> Result<usize> {
     ensure!(!options.is_empty(), "No options available");
     Ok(prompt(title, options, false, false, false)?.parse()?)
+}
+
+pub fn select_multiple(title: &str, options: &[String]) -> Result<Vec<usize>> {
+    ensure!(!options.is_empty(), "No options available");
+    let response = send_prompt(PromptRequest {
+        title: title.into(),
+        options: options.to_vec(),
+        input: false,
+        multiple: true,
+        minimal: false,
+        allow_empty: false,
+        theme: THEME.with(|theme| theme.borrow().clone()),
+        row_themes: vec![],
+        live_themes: vec![],
+        initial_selection: 0,
+    })?;
+    let indices: Vec<usize> = serde_json::from_str(&response)?;
+    ensure!(
+        !indices.is_empty()
+            && indices.iter().all(|index| *index < options.len())
+            && indices.windows(2).all(|pair| pair[0] < pair[1]),
+        "Invalid multiple selection"
+    );
+    Ok(indices)
 }
 
 pub fn input(title: &str) -> Result<String> {
@@ -826,6 +962,7 @@ pub fn select_key(
         title: title.to_owned(),
         options: options.to_vec(),
         input: false,
+        multiple: false,
         minimal: true,
         allow_empty: false,
         theme,
@@ -848,6 +985,7 @@ pub fn select_theme(
         title: "Choose theme".into(),
         options: names.to_vec(),
         input: false,
+        multiple: false,
         minimal: false,
         allow_empty: false,
         theme: Theme::default(),

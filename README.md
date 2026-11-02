@@ -360,6 +360,46 @@ qrlkit greet Hey
 
 Supported shells: `bash`, `sh`, and `zsh`.
 
+### Arguments
+
+Prompt for text or pick one allowed value.
+
+```toml
+[greet]
+args = [
+  { name = "name" },
+  { name = "greeting", enum = ["Hello", "Hi", "Hey"] },
+]
+run = 'printf "%s, %s!\n" "$2" "$1"'
+```
+
+```sh
+greet          # Prompt for both
+greet Ada      # Choose a greeting
+greet Ada Hi   # Use both directly
+```
+
+Scripts use `"$1"`, `"$2"`, etc. in `args` order. URLs and paths use `{name}`.
+Reuse a list with `enum = { ref = "shared.greetings" }`.
+
+Select several values with `multiple = true` and a nonempty `join` separator.
+
+```toml
+[dashboard]
+args = [
+  { name = "regions", enum = ["eu", "us", "asia"], multiple = true, join = "," },
+]
+url = "https://dashboard.example.com/?regions={regions}"
+```
+
+```sh
+dashboard           # Space toggles, Enter confirms at least one
+dashboard eu,asia   # Supply the joined value directly
+```
+
+Interactive selections follow list order and become one value: `eu,asia`.
+Values are URL-encoded in URLs. Choices must not conflict with the separator.
+
 ### Shared values
 
 Put shared values in any config and register it with `qrlkit add`.
@@ -394,7 +434,7 @@ NAME = "{shared.name}"
 
 `qrlkit` offers a few ways to compose one QRL from multiple others. First principle is that everything is callable and referenceable if its not `hidden = true`.
 
-** One QRL calls another**
+**One QRL calls another**
 ```
 [qrl-1]
 url = "https:/..."
@@ -407,7 +447,7 @@ url = "{qrl-1}/{qrl-1.qrl-2}"
 ```
 Not here its possible to chain keys with a dot like `objs.fruits.apples`. 
 
-** Group static fields and ref them**
+**Group static fields and ref them**
 
 ```toml
 [args]

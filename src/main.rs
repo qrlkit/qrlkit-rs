@@ -670,7 +670,15 @@ fn prompt_argument(arg: &script::Argument) -> anyhow::Result<String> {
                     )
                 })
                 .collect::<Vec<_>>();
-            Ok(choices[ui::select(&title, &labels)?].clone())
+            if arg.multiple {
+                Ok(ui::select_multiple(&title, &labels)?
+                    .into_iter()
+                    .map(|index| choices[index].as_str())
+                    .collect::<Vec<_>>()
+                    .join(arg.join.as_deref().unwrap()))
+            } else {
+                Ok(choices[ui::select(&title, &labels)?].clone())
+            }
         }
         None => ui::input(&title),
     }
