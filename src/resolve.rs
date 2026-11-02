@@ -70,6 +70,11 @@ fn argument_input(state: &State, entry: &Entry, argument: &Argument) -> Result<I
             );
             input_for(target)
         } else {
+            ensure!(
+                !argument.multiple,
+                "Multiple choice argument {} must reference a list, not a record group",
+                argument.name
+            );
             // Include empty groups so malformed records cannot silently disappear
             // from the choices inferred from their fields.
             let children = state
@@ -111,8 +116,17 @@ fn argument_input(state: &State, entry: &Entry, argument: &Argument) -> Result<I
             }
         };
         input.name = argument.name.clone();
+        input.multiple = argument.multiple;
+        input.join = argument.join.clone();
+        crate::script::validate_arguments(Some(std::slice::from_ref(&input)))?;
         Ok(Input {
-            id: key.join(" "),
+            id: if argument.multiple {
+                // A control separator cannot collide with a resource key or
+                // a scalar input. Different joins keep distinct selections.
+                format!("{}\0{}", key.join(" "), argument.join.as_deref().unwrap())
+            } else {
+                key.join(" ")
+            },
             argument: input,
         })
     } else {
@@ -979,6 +993,51 @@ url='{repos.open}/pulls?repo={projects.repos}'
             entry(&state, &["repos", "prs"]).hint.as_deref(),
             Some("Pull requests")
         );
+    }
+
+    #[test]
+    fn multiple_choice_references_share_only_the_same_selection_mode_and_separator() {
+        let (_dir, state) = fixture(
+            r#"
+[shared.regions]
+hint='Choose regions'
+values=[{value='eu',hint='Europe'},{value='us',hint='United States'},{value='asia',hint='Asia'}]
+[view]
+args=[
+  {name='regions',enum={ref='shared.regions'},multiple=true,join=','},
+  {name='mirror',enum={ref='shared.regions'},multiple=true,join=','},
+  {name='single',enum={ref='shared.regions'}},
+  {name='other',enum={ref='shared.regions'},multiple=true,join='|'},
+]
+url='https://example.com/{regions}/{mirror}/{single}/{other}/{shared.regions}'
+"#,
+        );
+        let mut prompts = vec![];
+        let result = evaluate(&state, entry(&state, &["view"]), &[], |argument| {
+            prompts.push(argument.name.clone());
+            assert_eq!(argument.hint.as_deref(), Some("Choose regions"));
+            assert_eq!(argument.choices.as_ref().unwrap(), &["eu", "us", "asia"]);
+            assert_eq!(argument.choice_hints[0].as_deref(), Some("Europe"));
+            Ok(match argument.join.as_deref() {
+                Some(",") => "eu,asia",
+                Some("|") => "eu|asia",
+                None => "us",
+                _ => unreachable!(),
+            }
+            .into())
+        })
+        .unwrap();
+        assert_eq!(prompts, ["regions", "single", "other"]);
+        assert_eq!(
+            result.value,
+            "https://example.com/eu%2Casia/eu%2Casia/us/eu%7Casia/us"
+        );
+        let supplied = ["eu,asia", "us", "eu|asia"].map(str::to_owned);
+        let direct = evaluate(&state, entry(&state, &["view"]), &supplied, |_| {
+            panic!("all selections supplied")
+        })
+        .unwrap();
+        assert_eq!(direct.value, result.value);
     }
 
     #[test]

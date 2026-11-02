@@ -30,6 +30,10 @@ pub struct Argument {
     pub name: String,
     #[serde(default, rename = "enum", skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multiple: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -108,10 +112,11 @@ pub fn arguments(value: Option<&Node>) -> Result<Option<Vec<Argument>>> {
                         anyhow::bail!("Each argument must be a table")
                     };
                     ensure!(
-                        table
-                            .keys()
-                            .all(|key| matches!(key.as_str(), "name" | "enum")),
-                        "Arguments accept only name and enum"
+                        table.keys().all(|key| matches!(
+                            key.as_str(),
+                            "name" | "enum" | "multiple" | "join"
+                        )),
+                        "Arguments accept only name, enum, multiple, and join"
                     );
                     let name = table
                         .get("name")
@@ -149,6 +154,20 @@ pub fn arguments(value: Option<&Node>) -> Result<Option<Vec<Argument>>> {
                         name,
                         choices: if reference.is_some() { None } else { choices },
                         reference,
+                        multiple: match table.get("multiple") {
+                            Some(Node::Bool(value)) => *value,
+                            None => false,
+                            _ => anyhow::bail!("Argument multiple must be a boolean"),
+                        },
+                        join: table
+                            .get("join")
+                            .map(|value| {
+                                value
+                                    .as_str()
+                                    .context("Argument join must be a string")
+                                    .map(str::to_owned)
+                            })
+                            .transpose()?,
                         ..Default::default()
                     })
                 })
@@ -283,12 +302,31 @@ impl Argument {
         let Some(choices) = &self.choices else {
             return Ok(());
         };
-        ensure!(
-            choices.iter().any(|choice| choice == value),
-            "Invalid value {value:?} for {}; expected one of: {}",
-            self.name,
-            choices.join(", ")
-        );
+        let values = if self.multiple {
+            value
+                .split(
+                    self.join
+                        .as_deref()
+                        .context("Multiple choice arguments require join")?,
+                )
+                .collect::<Vec<_>>()
+        } else {
+            vec![value]
+        };
+        let mut seen = BTreeSet::new();
+        for value in values {
+            ensure!(
+                choices.iter().any(|choice| choice == value),
+                "Invalid value {value:?} for {}; expected one of: {}",
+                self.name,
+                choices.join(", ")
+            );
+            ensure!(
+                seen.insert(value),
+                "Duplicate selection for {}: {value}",
+                self.name
+            );
+        }
         Ok(())
     }
 }
@@ -307,6 +345,23 @@ pub fn validate_arguments(args: Option<&[Argument]>) -> Result<()> {
                 "Duplicate argument name: {}",
                 arg.name
             );
+            if arg.multiple {
+                ensure!(
+                    arg.choices.is_some() || arg.reference.is_some(),
+                    "Multiple choice argument {} requires an enum",
+                    arg.name
+                );
+                let separator = arg
+                    .join
+                    .as_deref()
+                    .context("Multiple choice arguments require join")?;
+                ensure!(
+                    !separator.is_empty() && !separator.contains('\0'),
+                    "Argument join must be nonempty and cannot contain NUL"
+                );
+            } else {
+                ensure!(arg.join.is_none(), "Argument join requires multiple = true");
+            }
             if let Some(reference) = &arg.reference {
                 ensure!(
                     arg.choices.is_none(),
@@ -333,6 +388,17 @@ pub fn validate_arguments(args: Option<&[Argument]>) -> Result<()> {
             let mut choices = BTreeSet::new();
             for value in allowed {
                 ensure!(!value.contains('\0'), "Enum choices cannot contain NUL");
+                if arg.multiple {
+                    let separator = arg.join.as_deref().unwrap();
+                    // The joined value must split back into the exact choices,
+                    // including separators that overlap a choice's suffix.
+                    ensure!(
+                        !value.is_empty()
+                            && format!("{value}{separator}").find(separator) == Some(value.len()),
+                        "Choice {value:?} for {} conflicts with the join separator or is empty",
+                        arg.name
+                    );
+                }
                 ensure!(
                     choices.insert(value),
                     "Duplicate choice for {}: {value}",

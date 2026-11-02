@@ -258,6 +258,64 @@ args = [
 
 print("Enum arguments: full and partial selection, ordering, and cancellation passed")
 
+
+with tempfile.TemporaryDirectory(prefix="qrl-multiple-test-") as directory:
+    root = Path(directory)
+    source = root / "tasks.toml"
+    source.write_text('''
+[shared]
+hidden = true
+[shared.regions]
+values = [
+    { value = "eu", hint = "Europe" },
+    { value = "us west", hint = "Western US" },
+    { value = "asia", hint = "Asia" },
+]
+[deploy]
+run = 'printf "%s/%s/%s" "$#" "$1" "$2" > selected'
+args = [
+    { name = "regions", enum = { ref = "shared.regions" }, multiple = true, join = "," },
+    { name = "note" },
+]
+[dashboard]
+args = [{ name = "regions", enum = ["eu", "us west", "asia"], multiple = true, join = "," }]
+url = "https://example.com/?regions={regions}"
+''')
+    (root / "state.yaml").write_text(json.dumps({
+        "version": 1,
+        "browser": {"name": "Test", "executable": "/bin/echo"},
+        "sources": [],
+    }))
+    env = dict(os.environ, HOME=str(root), ZDOTDIR=str(root), SHELL="/bin/zsh")
+    subprocess.run(
+        [str(BINARY), "--config", str(root / "state.yaml"), "add", str(source)],
+        env=env, capture_output=True, check=True,
+    )
+    # Enter with nothing checked keeps the picker open. Toggle off/on and
+    # select in reverse order to verify output still follows configured order.
+    transcript = run_interactive(root, [
+        ("Space toggles", b"\r\x1b[B\x1b[B \x1b[A\x1b[A   \r"),
+        ("note:", b"Release\r"),
+    ], command=("deploy",), verify_terminal=True)
+    visible = b"".join(re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", transcript).split())
+    assert b"Europe" in visible and b"WesternUS" in visible
+    assert (root / "selected").read_text() == "2/eu,asia/Release"
+    run_interactive(root, [("note:", b"Direct\r")], command=("deploy", "us west,asia"))
+    assert (root / "selected").read_text() == "2/us west,asia/Direct"
+    (root / "selected").unlink()
+    for cancel in [b"\x1b", b"\x03"]:
+        run_interactive(root, [("Space toggles", b" " + cancel)], success=False, command=("deploy",), verify_terminal=True)
+        assert not (root / "selected").exists()
+    run_interactive(root, [
+        ("Space toggles", b" \r"),
+        ("note:", b"\x1b"),
+    ], success=False, command=("deploy",))
+    assert not (root / "selected").exists()
+    transcript = run_interactive(root, [("Space toggles", b" \x1b[B \r")], command=("dashboard",))
+    assert b"https://example.com/?regions=eu%2Cus%20west" in transcript
+
+print("Multiple choice: hints, toggling, required selection, ordering, script/URL consumption, and cancellation passed")
+
 with tempfile.TemporaryDirectory(prefix="qrl-text-arg-test-") as directory:
     root = Path(directory)
     source = root / "tasks.toml"

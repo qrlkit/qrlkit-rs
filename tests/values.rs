@@ -961,3 +961,152 @@ url='https://example.com/{routes[base]}'
         "https://example.com/matched"
     );
 }
+
+#[test]
+fn multiple_choices_are_joined_for_scripts_templates_and_environment_across_formats() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = fixture();
+        let root = dir.path();
+        let config = json!({
+            "shared": {"hidden": true, "regions": {"values": [
+                {"value": "eu", "hint": "Europe"},
+                {"value": "us west", "hint": "Western US"},
+                {"value": "asia", "hint": "Asia"}
+            ]}},
+            "deploy": {
+                "args": [
+                    {"name": "regions", "enum": {"ref": "shared.regions"}, "multiple": true, "join": ","},
+                    {"name": "note"}
+                ],
+                "run": "printf '%s\\n' \"$#\" \"$1\" \"$2\" \"$REGIONS\" > selected",
+                "env": {"REGIONS": "{regions}"}
+            },
+            "dashboard": {
+                "args": [{"name": "regions", "enum": ["eu", "us west", "asia"], "multiple": true, "join": ","}],
+                "url": "https://example.com/?regions={regions}&again={regions}"
+            },
+            "literal": {
+                "args": [{"name": "items", "enum": ["safe", "$(touch injected)", "{missing.reference}"], "multiple": true, "join": " | "}],
+                "run": "printf '%s' \"$1\" > literal"
+            }
+        });
+        let text = match extension {
+            "toml" => toml::to_string(&config).unwrap(),
+            "yaml" => serde_yaml_ng::to_string(&config).unwrap(),
+            _ => config.to_string(),
+        };
+        let name = format!("multiple.{extension}");
+        fs::write(root.join(&name), text).unwrap();
+        success(root, &["add", &name]);
+        success(root, &["reload"]);
+        success(root, &["deploy", "eu,us west", "Release safely"]);
+        assert_eq!(
+            fs::read_to_string(root.join("selected")).unwrap(),
+            "2\neu,us west\nRelease safely\neu,us west\n"
+        );
+        assert_eq!(
+            output(root, &["dashboard", "eu,us west"]),
+            "https://example.com/?regions=eu%2Cus%20west&again=eu%2Cus%20west"
+        );
+        assert_eq!(
+            output(root, &["dashboard", "asia"]),
+            "https://example.com/?regions=asia&again=asia"
+        );
+        success(
+            root,
+            &["literal", "$(touch injected) | {missing.reference}"],
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("literal")).unwrap(),
+            "$(touch injected) | {missing.reference}"
+        );
+        assert!(!root.join("injected").exists());
+
+        fs::remove_file(root.join("selected")).unwrap();
+        for value in ["", "eu,", ",eu", "eu,,asia", "eu,eu", "eu,unknown"] {
+            let result = run(root, &["deploy", value]);
+            assert!(!result.status.success(), "accepted {value:?}");
+            let error = String::from_utf8_lossy(&result.stderr);
+            assert!(
+                error.contains("Invalid value") || error.contains("Duplicate selection"),
+                "{error}"
+            );
+            assert!(!error.contains("interactive terminal"), "{error}");
+            assert!(!root.join("selected").exists());
+        }
+    }
+}
+
+#[test]
+fn malformed_multiple_choice_arguments_are_rejected_during_import() {
+    let cases = [
+        (
+            json!({"name": "items", "multiple": true, "join": ","}),
+            "requires an enum",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "multiple": true}),
+            "require join",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "multiple": true, "join": ""}),
+            "join must be nonempty",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "multiple": true, "join": "\0"}),
+            "cannot contain NUL",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "join": ","}),
+            "requires multiple = true",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "multiple": "true", "join": ","}),
+            "must be a boolean",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "multiple": true, "join": false}),
+            "must be a string",
+        ),
+        (
+            json!({"name": "items", "enum": [""], "multiple": true, "join": ","}),
+            "is empty",
+        ),
+        (
+            json!({"name": "items", "enum": ["a,b"], "multiple": true, "join": ","}),
+            "conflicts with the join separator",
+        ),
+        (
+            json!({"name": "items", "enum": ["a"], "multiple": true, "join": "aa"}),
+            "conflicts with the join separator",
+        ),
+        (
+            json!({"name": "items", "enum": {"ref": "shared.regions"}, "multiple": true, "join": ","}),
+            "conflicts with the join separator",
+        ),
+        (
+            json!({"name": "items", "enum": {"ref": "records"}, "multiple": true, "join": ","}),
+            "must reference a list",
+        ),
+    ];
+    for (argument, expected) in cases {
+        let dir = fixture();
+        let root = dir.path();
+        let before = fs::read(root.join("state.yaml")).unwrap();
+        let config = json!({
+            "shared": {"regions": ["a,b"]},
+            "records": {"first": {"value": "one"}},
+            "task": {"args": [argument], "run": "touch executed"}
+        });
+        fs::write(root.join("invalid.json"), config.to_string()).unwrap();
+        let result = run(root, &["add", "invalid.json"]);
+        assert!(!result.status.success(), "accepted {config}");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(fs::read(root.join("state.yaml")).unwrap(), before);
+        assert!(!root.join("executed").exists());
+    }
+}
