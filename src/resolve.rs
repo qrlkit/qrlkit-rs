@@ -2,7 +2,7 @@
 use crate::{
     script::{Argument, Script},
     store::{Entry, State},
-    template::{self, Expression},
+    template::{self, CallArgument, Expression},
 };
 use anyhow::{Context, Result, bail, ensure};
 use std::collections::{BTreeMap, BTreeSet};
@@ -208,10 +208,110 @@ fn expression(state: &State, entry: &Entry, text: &str) -> Result<Expression> {
                     Ok(Expression::Lookup(Box::new(base), selectors))
                 }
             }
-            Expression::Key(_) => Ok(expr),
+            Expression::Key(_) | Expression::Call(_, _) => Ok(expr),
         }
     }
     bind(state, entry, template::expression(text)?)
+}
+
+struct Scope<T> {
+    key: Vec<String>,
+    id: String,
+    bindings: BTreeMap<String, T>,
+}
+
+fn bound<'a, T>(scopes: &'a [Scope<T>], entry: &Entry, name: &str) -> Option<&'a T> {
+    scopes
+        .iter()
+        .rev()
+        .find(|scope| scope.key == entry.key)
+        .and_then(|scope| scope.bindings.get(name))
+}
+
+fn cache_key<T>(scopes: &[Scope<T>], entry: &Entry) -> Vec<String> {
+    let mut key = entry.key.clone();
+    if scopes.iter().any(|scope| scope.key == entry.key) {
+        key.extend(scopes.iter().map(|scope| scope.id.clone()));
+    }
+    key
+}
+
+fn call_target<'a>(
+    state: &'a State,
+    entry: &Entry,
+    path: &[String],
+    values: &[(String, CallArgument)],
+) -> Result<(&'a Entry, BTreeMap<String, Argument>)> {
+    fn collect(
+        state: &State,
+        entry: &Entry,
+        expr: Expression,
+        parameters: &mut BTreeMap<String, Argument>,
+    ) -> Result<()> {
+        match expr {
+            Expression::Path(path) => {
+                if path.len() == 1
+                    && template::valid_name(&path[0])
+                    && !state.contains(&reference(state, entry, &path))
+                {
+                    parameters
+                        .entry(path[0].clone())
+                        .or_insert_with(|| Argument {
+                            name: path[0].clone(),
+                            ..Default::default()
+                        });
+                }
+            }
+            Expression::Lookup(base, selectors) => {
+                collect(state, entry, *base, parameters)?;
+                for selector in selectors {
+                    collect(state, entry, selector, parameters)?;
+                }
+            }
+            Expression::Call(_, values) => {
+                for (_, value) in values {
+                    if let CallArgument::Template(text) = value {
+                        for name in template::names(&text)? {
+                            collect(state, entry, template::expression(&name)?, parameters)?;
+                        }
+                    }
+                }
+            }
+            Expression::Key(_) => {}
+        }
+        Ok(())
+    }
+    let key = reference(state, entry, path);
+    let target = state
+        .lookup(&key)
+        .with_context(|| format!("Unknown template: {}", path.join(".")))?;
+    ensure!(
+        target.script.is_none() && target.choices.is_none(),
+        "Template calls require a text value or resource: {}",
+        path.join(".")
+    );
+    let mut parameters = BTreeMap::new();
+    for argument in arguments(target).unwrap_or_default() {
+        parameters.insert(argument.name.clone(), argument.clone());
+    }
+    for name in template::names(target.value.as_ref().unwrap_or(&target.url))? {
+        collect(state, target, template::expression(&name)?, &mut parameters)?;
+    }
+    for (name, _) in values {
+        ensure!(
+            parameters.contains_key(name),
+            "Unknown argument {name} for template {}",
+            path.join(".")
+        );
+    }
+    for name in parameters.keys() {
+        ensure!(
+            values.iter().any(|(key, _)| key == name),
+            "Missing argument {name} for template {}",
+            path.join(".")
+        );
+    }
+    Ok((target, parameters))
 }
 
 struct Plan<'a> {
@@ -221,6 +321,7 @@ struct Plan<'a> {
     active: Vec<Vec<String>>,
     complete: BTreeSet<Vec<String>>,
     uncertain_from: Option<usize>,
+    scopes: Vec<Scope<Option<String>>>,
 }
 
 impl<'a> Plan<'a> {
@@ -232,6 +333,7 @@ impl<'a> Plan<'a> {
             active: vec![],
             complete: BTreeSet::new(),
             uncertain_from: None,
+            scopes: vec![],
         }
     }
 
@@ -249,7 +351,8 @@ impl<'a> Plan<'a> {
     }
 
     fn node(&mut self, entry: &Entry) -> Result<()> {
-        if self.complete.contains(&entry.key) {
+        let cache_key = cache_key(&self.scopes, entry);
+        if self.complete.contains(&cache_key) {
             return Ok(());
         }
         ensure!(
@@ -272,7 +375,9 @@ impl<'a> Plan<'a> {
         } else {
             if let Some(arguments) = arguments(entry) {
                 for argument in arguments {
-                    self.add(argument_input(self.state, entry, argument)?)?;
+                    if bound(&self.scopes, entry, &argument.name).is_none() {
+                        self.add(argument_input(self.state, entry, argument)?)?;
+                    }
                 }
             }
             if let Some(script) = &entry.script {
@@ -284,7 +389,7 @@ impl<'a> Plan<'a> {
             }
         }
         self.active.pop();
-        self.complete.insert(entry.key.clone());
+        self.complete.insert(cache_key);
         Ok(())
     }
 
@@ -297,8 +402,39 @@ impl<'a> Plan<'a> {
 
     fn expr(&mut self, entry: &Entry, expr: &Expression) -> Result<()> {
         match expr {
+            Expression::Call(path, values) => {
+                let (target, parameters) = call_target(self.state, entry, path, values)?;
+                let mut bindings = BTreeMap::new();
+                for (name, value) in values {
+                    let known = match value {
+                        CallArgument::Literal(text) => Some(text.clone()),
+                        CallArgument::Template(text) => {
+                            self.text(entry, text)?;
+                            self.known_text(entry, text, &mut BTreeSet::new())?
+                        }
+                    };
+                    if let Some(value) = &known {
+                        argument_input(self.state, target, &parameters[name])?
+                            .argument
+                            .validate_value(value)?;
+                    }
+                    bindings.insert(name.clone(), known);
+                }
+                self.scopes.push(Scope {
+                    key: target.key.clone(),
+                    id: format!("{:?}:{expr:?}", entry.key),
+                    bindings,
+                });
+                let result = self.node(target);
+                self.scopes.pop();
+                result
+            }
             Expression::Key(_) => Ok(()),
             Expression::Path(path) => {
+                if path.len() == 1 && bound(&self.scopes, entry, &path[0]).is_some() {
+                    return Ok(());
+                }
+
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
                         .and_then(|args| args.iter().find(|arg| arg.name == path[0]))
@@ -379,6 +515,32 @@ impl<'a> Plan<'a> {
         }
     }
 
+    fn known_text(
+        &self,
+        entry: &Entry,
+        text: &str,
+        active: &mut BTreeSet<Vec<String>>,
+    ) -> Result<Option<String>> {
+        let mut result = String::new();
+        let mut rest = text;
+        while let Some(start) = rest.find('{') {
+            result.push_str(&rest[..start]);
+            let end = template::placeholder_end(&rest[start..])? + start;
+            let Some(value) = self.known(
+                entry,
+                &expression(self.state, entry, &rest[start + 1..end])?,
+                active,
+            )?
+            else {
+                return Ok(None);
+            };
+            result.push_str(&value);
+            rest = &rest[end + 1..];
+        }
+        result.push_str(rest);
+        Ok(Some(result))
+    }
+
     /// Inspect supplied/fixed values without running scripts or opening prompts.
     fn known(
         &self,
@@ -387,8 +549,15 @@ impl<'a> Plan<'a> {
         active: &mut BTreeSet<Vec<String>>,
     ) -> Result<Option<String>> {
         match expr {
+            Expression::Call(_, _) => Ok(None),
             Expression::Key(key) => Ok(Some(key.clone())),
             Expression::Path(path) => {
+                if path.len() == 1
+                    && let Some(value) = bound(&self.scopes, entry, &path[0])
+                {
+                    return Ok(value.clone());
+                }
+
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
                         .and_then(|args| args.iter().find(|arg| arg.name == path[0]))
@@ -428,26 +597,9 @@ impl<'a> Plan<'a> {
                         active.remove(&key);
                         return Ok(None);
                     }
-                    let mut result = String::new();
-                    let mut rest = text.as_str();
-                    while let Some(start) = rest.find('{') {
-                        result.push_str(&rest[..start]);
-                        let end = rest[start..].find('}').unwrap() + start;
-                        let Some(value) = self.known(
-                            target,
-                            &expression(self.state, target, &rest[start + 1..end])?,
-                            active,
-                        )?
-                        else {
-                            active.remove(&key);
-                            return Ok(None);
-                        };
-                        result.push_str(&value);
-                        rest = &rest[end + 1..];
-                    }
-                    result.push_str(rest);
+                    let result = self.known_text(target, text, active);
                     active.remove(&key);
-                    return Ok(Some(result));
+                    return result;
                 }
                 Ok(self
                     .inputs
@@ -544,6 +696,7 @@ pub fn evaluate(
         next: 0,
         previews: BTreeMap::new(),
         deferred: false,
+        scopes: vec![],
     };
     evaluator.prepare(entry)?;
     evaluator.deferred = false;
@@ -582,6 +735,7 @@ struct Evaluator<'a, F> {
     next: usize,
     previews: BTreeMap<Vec<String>, Option<Value>>,
     deferred: bool,
+    scopes: Vec<Scope<Option<Value>>>,
 }
 
 impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
@@ -613,7 +767,7 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
         if self.deferred {
             return Ok(None);
         }
-        if let Some(value) = self.previews.get(&entry.key) {
+        if let Some(value) = self.previews.get(&cache_key(&self.scopes, entry)) {
             return Ok(value.clone());
         }
         let value = if entry.choices.is_some() {
@@ -625,7 +779,9 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
         } else {
             if let Some(arguments) = arguments(entry) {
                 for argument in arguments {
-                    self.input(&argument_input(self.state, entry, argument)?.id)?;
+                    if bound(&self.scopes, entry, &argument.name).is_none() {
+                        self.input(&argument_input(self.state, entry, argument)?.id)?;
+                    }
                 }
             }
             if let Some(script) = &entry.script {
@@ -641,19 +797,69 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
             }
         };
         if !self.deferred {
-            self.previews.insert(entry.key.clone(), value.clone());
+            self.previews
+                .insert(cache_key(&self.scopes, entry), value.clone());
         }
         Ok(value)
     }
 
+    fn call(&mut self, entry: &Entry, expr: &Expression, preview: bool) -> Result<Option<Value>> {
+        let Expression::Call(path, arguments) = expr else {
+            unreachable!()
+        };
+        let (target, parameters) = call_target(self.state, entry, path, arguments)?;
+        let mut bindings = BTreeMap::new();
+        for (name, argument) in arguments {
+            let value = match argument {
+                CallArgument::Literal(text) => Some(Value {
+                    text: text.clone(),
+                    raw: false,
+                    parts: vec![],
+                }),
+                CallArgument::Template(text) if preview => self.preview_text(entry, text, false)?,
+                CallArgument::Template(text) => {
+                    Some(Self::composed(self.parts(entry, text)?, false)?)
+                }
+            };
+            if self.deferred {
+                return Ok(None);
+            }
+            if let Some(value) = &value {
+                argument_input(self.state, target, &parameters[name])?
+                    .argument
+                    .validate_value(&value.text)?;
+            }
+            bindings.insert(name.clone(), value);
+        }
+        self.scopes.push(Scope {
+            key: target.key.clone(),
+            id: format!("{:?}:{expr:?}", entry.key),
+            bindings,
+        });
+        let result = if preview {
+            self.prepare(target)
+        } else {
+            self.node(target).map(Some)
+        };
+        self.scopes.pop();
+        result
+    }
+
     fn preview_expr(&mut self, entry: &Entry, expr: &Expression) -> Result<Option<Value>> {
         match expr {
+            Expression::Call(_, _) => self.call(entry, expr, true),
             Expression::Key(key) => Ok(Some(Value {
                 text: key.clone(),
                 raw: true,
                 parts: vec![],
             })),
             Expression::Path(path) => {
+                if path.len() == 1
+                    && let Some(value) = bound(&self.scopes, entry, &path[0])
+                {
+                    return Ok(value.clone());
+                }
+
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
                         .and_then(|args| args.iter().find(|arg| arg.name == path[0]))
@@ -719,7 +925,7 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
                 raw: true,
                 parts: vec![],
             });
-            let end = rest[start..].find('}').context("Unclosed reference")? + start;
+            let end = template::placeholder_end(&rest[start..])? + start;
             if let Some(value) = self.preview_expr(
                 entry,
                 &expression(self.state, entry, &rest[start + 1..end])?,
@@ -746,7 +952,7 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
     }
 
     fn node(&mut self, entry: &Entry) -> Result<Value> {
-        if let Some(value) = self.values.get(&entry.key) {
+        if let Some(value) = self.values.get(&cache_key(&self.scopes, entry)) {
             return Ok(value.clone());
         }
         ensure!(
@@ -774,18 +980,28 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
             Self::composed(parts, true)?
         };
         self.active.remove(&entry.key);
-        self.values.insert(entry.key.clone(), value.clone());
+        self.values
+            .insert(cache_key(&self.scopes, entry), value.clone());
         Ok(value)
     }
 
     fn expr(&mut self, entry: &Entry, expr: &Expression) -> Result<Value> {
         match expr {
+            Expression::Call(_, _) => self
+                .call(entry, expr, false)?
+                .context("Unresolved template argument"),
             Expression::Key(key) => Ok(Value {
                 text: key.clone(),
                 raw: true,
                 parts: vec![],
             }),
             Expression::Path(path) => {
+                if path.len() == 1
+                    && let Some(value) = bound(&self.scopes, entry, &path[0])
+                {
+                    return value.clone().context("Unresolved template argument");
+                }
+
                 if path.len() == 1
                     && let Some(argument) = arguments(entry)
                         .and_then(|args| args.iter().find(|arg| arg.name == path[0]))
@@ -840,7 +1056,7 @@ impl<F: FnMut(&Argument) -> Result<String>> Evaluator<'_, F> {
                 raw: true,
                 parts: vec![],
             });
-            let end = rest[start..].find('}').context("Unclosed reference")? + start;
+            let end = template::placeholder_end(&rest[start..])? + start;
             parts.push(self.expr(
                 entry,
                 &expression(self.state, entry, &rest[start + 1..end])?,

@@ -1110,3 +1110,255 @@ fn malformed_multiple_choice_arguments_are_rejected_during_import() {
         assert!(!root.join("executed").exists());
     }
 }
+
+#[test]
+fn named_template_calls_compose_and_forward_arguments_across_formats() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = fixture();
+        let root = dir.path();
+        let config = json!({
+            "example": {
+                "templ": "https://example.com/{area}?filter={example.filter(height={height}, width={width})}",
+                "filter": "fancy:syntax(heights=[{height}],widths=[{width}],depth=20)"
+            },
+            "fixed": "{example.templ(area=2,height=3,width=5)}",
+            "pair": "{example.filter(height=1,width=2)}|{example.filter(width=4,height=3)}|{example.filter(height=1,width=2)}",
+            "forward": {"url": "{example.templ(area={area}, height={height}, width={width})}", "args": [
+                {"name": "width"}, {"name": "height"}, {"name": "area"}
+            ]},
+            "value": "item:{text}",
+            "quoted": "{value(text=\"a,b={missing}; \\\"quoted\\\"\")}",
+            "literal": "{example.templ(area='a /?&ø',height=3,width=5)}"
+        });
+        let text = match extension {
+            "toml" => toml::to_string(&config).unwrap(),
+            "yaml" => serde_yaml_ng::to_string(&config).unwrap(),
+            _ => config.to_string(),
+        };
+        let name = format!("tools.{extension}");
+        fs::write(root.join(&name), text).unwrap();
+        success(root, &["add", &name]);
+        success(root, &["reload"]);
+        assert_eq!(
+            output(root, &["fixed"]),
+            "https://example.com/2?filter=fancy:syntax(heights=[3],widths=[5],depth=20)"
+        );
+        assert_eq!(
+            output(root, &["example", "templ", "2", "3", "5"]),
+            output(root, &["fixed"])
+        );
+        assert_eq!(
+            output(root, &["forward", "5", "3", "2"]),
+            output(root, &["fixed"])
+        );
+        assert_eq!(
+            output(root, &["pair"]),
+            "fancy:syntax(heights=[1],widths=[2],depth=20)|fancy:syntax(heights=[3],widths=[4],depth=20)|fancy:syntax(heights=[1],widths=[2],depth=20)"
+        );
+        assert_eq!(output(root, &["quoted"]), "item:a,b={missing}; \"quoted\"");
+        assert_eq!(
+            output(root, &["literal"]),
+            "https://example.com/a%20%2F%3F%26%C3%B8?filter=fancy:syntax(heights=[3],widths=[5],depth=20)"
+        );
+    }
+}
+
+#[test]
+fn template_call_bindings_work_with_records_lookups_and_shared_script_values() {
+    let dir = fixture();
+    let root = dir.path();
+    import(
+        root,
+        r#"
+[projects.rs]
+org='rust'
+[projects.web]
+org='browser'
+[shared.dynamic]
+run='printf x >> calls; printf shared'
+[view]
+url='https://{shared.dynamic}.example.com/{project.org}/{view.names[project]}/{text}'
+args=[{name='project',enum={ref='projects'}},{name='text'}]
+[view.names]
+rs='language'
+web='website'
+[pair]
+url='{view(project=rs,text="a /?&ø")}?other={view(project=web,text=b%2Fc)}'
+"#,
+    );
+    assert!(!root.join("calls").exists());
+    assert_eq!(
+        output(root, &["pair"]),
+        "https://shared.example.com/rust/language/a%20%2F%3F%26%C3%B8?other=https://shared.example.com/browser/website/b%252Fc"
+    );
+    assert_eq!(fs::read_to_string(root.join("calls")).unwrap(), "x");
+}
+
+#[test]
+fn invalid_template_calls_are_rejected_without_executing_dependencies() {
+    for (call, error) in [
+        ("{view(text=hello)}", "Missing argument choice"),
+        (
+            "{view(text=hello,choice=valid,extra=oops)}",
+            "Unknown argument extra",
+        ),
+        (
+            "{view(text=hello,text=again,choice=valid)}",
+            "Duplicate argument: text",
+        ),
+        ("{view(text=hello,choice=invalid)}", "Invalid value"),
+        ("{missing(text=hello)}", "Unknown template: missing"),
+        (
+            "{shared.dynamic()}",
+            "Template calls require a text value or resource",
+        ),
+        (
+            "{choices()}",
+            "Template calls require a text value or resource",
+        ),
+    ] {
+        let dir = fixture();
+        let root = dir.path();
+        let text = format!(
+            r#"
+[shared.dynamic]
+run='touch executed; printf shared'
+[choices]
+values=['valid']
+[view]
+url='https://{{shared.dynamic}}.example.com/{{text}}/{{choice}}'
+args=[{{name='text'}},{{name='choice',enum=['valid']}}]
+[bad]
+url='{call}'
+"#
+        );
+        fs::write(root.join("tools.toml"), text).unwrap();
+        let result = run(root, &["add", "tools.toml"]);
+        assert!(!result.status.success(), "{call}");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains(error), "{call}: {stderr}");
+        assert!(!root.join("executed").exists(), "{call}");
+    }
+}
+
+#[test]
+fn forwarded_template_arguments_are_validated_before_dependencies_execute() {
+    let dir = fixture();
+    let root = dir.path();
+    import(
+        root,
+        r#"
+[shared.dynamic]
+run='touch executed; printf host'
+[view]
+url='https://{shared.dynamic}.example.com/{choice}'
+args=[{name='choice',enum=['valid']}]
+[forward]
+url='{view(choice={choice})}'
+"#,
+    );
+    assert!(!run(root, &["forward", "invalid"]).status.success());
+    assert!(!root.join("executed").exists());
+    assert_eq!(
+        output(root, &["forward", "valid"]),
+        "https://host.example.com/valid"
+    );
+}
+
+#[test]
+fn nested_calls_keep_outer_bindings_and_accept_expressions_in_arguments() {
+    let dir = fixture();
+    let root = dir.path();
+    import(
+        root,
+        r#"
+[example]
+inner='[{text}]'
+outer='value:{example.inner(text={text})}/{text}'
+wrap='({text})'
+nested='{example.inner(text={example.wrap(text={text})})}'
+pair='{example.outer(text=first)}|{example.outer(text=second)}'
+[shared]
+first=['a']
+second=['b']
+[shared.mapping.a]
+b='chosen'
+[show]
+run='printf "%s" "$VALUE"'
+[show.env]
+VALUE='{example.nested(text={shared.mapping[shared.first, shared.second]})}'
+"#,
+    );
+    assert_eq!(
+        output(root, &["example", "pair"]),
+        "value:[first]/first|value:[second]/second"
+    );
+    assert_eq!(output(root, &["show", "a", "b"]), "[(chosen)]");
+}
+
+#[test]
+fn circular_template_calls_fail_import() {
+    for definitions in [
+        "[example]\na='{example.a(text={text})}'\n",
+        "[example]\na='{example.b(text={text})}'\nb='{example.a(text={text})}'\n",
+        "[example]\na='{example.b()}'\nb='{example.a}'\n",
+    ] {
+        let dir = fixture();
+        let root = dir.path();
+        fs::write(root.join("tools.toml"), definitions).unwrap();
+        let result = run(root, &["add", "tools.toml"]);
+        assert!(!result.status.success());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains("Circular reference"), "{stderr}");
+    }
+}
+
+#[test]
+fn a_person_enum_supplies_record_fields_to_nested_template_calls_across_formats() {
+    for extension in ["toml", "yaml", "json"] {
+        let dir = fixture();
+        let root = dir.path();
+        let config = json!({
+            "people": {
+                "Alice": {"area": "2", "height": "3", "width": "5"},
+                "Bob": {"area": "4", "height": "6", "width": "8"},
+                "Charlie": {"area": "7", "height": "9", "width": "11"},
+                "Dana": {"area": "10", "height": "12", "width": "14"}
+            },
+            "example": {
+                "templ": "https://example.com/{area}?filter={example.filter(height={height}, width={width})}",
+                "filter": "fancy:syntax(heights=[{height}],widths=[{width}],depth=20)"
+            },
+            "links": {"profile": {
+                "args": [{"name": "person", "enum": {"ref": "people"}}],
+                "url": "{example.templ(area={person.area}, height={person.height}, width={person.width})}"
+            }}
+        });
+        let text = match extension {
+            "toml" => toml::to_string(&config).unwrap(),
+            "yaml" => serde_yaml_ng::to_string(&config).unwrap(),
+            _ => config.to_string(),
+        };
+        let name = format!("tools.{extension}");
+        fs::write(root.join(&name), text).unwrap();
+        success(root, &["add", &name]);
+        success(root, &["reload"]);
+        for (person, area, height, width) in [
+            ("Alice", "2", "3", "5"),
+            ("Bob", "4", "6", "8"),
+            ("Charlie", "7", "9", "11"),
+            ("Dana", "10", "12", "14"),
+        ] {
+            assert_eq!(
+                output(root, &["links", "profile", person]),
+                format!(
+                    "https://example.com/{area}?filter=fancy:syntax(heights=[{height}],widths=[{width}],depth=20)"
+                ),
+                "{extension}: {person}"
+            );
+        }
+        let result = run(root, &["links", "profile", "Unknown"]);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("Invalid value"));
+    }
+}

@@ -6,6 +6,13 @@ pub enum Expression {
     Lookup(Box<Expression>, Vec<Expression>),
     /// A fixed lookup key generated when binding a selected record's fields.
     Key(String),
+    Call(Vec<String>, Vec<(String, CallArgument)>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallArgument {
+    Literal(String),
+    Template(String),
 }
 
 pub fn valid_name(name: &str) -> bool {
@@ -17,50 +24,157 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 pub fn expression(text: &str) -> Result<Expression> {
-    fn parse(text: &str, depth: usize) -> Result<Expression> {
-        ensure!(depth < 64, "Reference nesting exceeds 64 levels");
-        let text = text.trim();
-        let (path, suffix) = text.split_once('[').map_or((text, ""), |(a, b)| (a, b));
-        let segments: Vec<String> = path.trim().split('.').map(str::to_owned).collect();
-        ensure!(
-            segments.iter().all(|part| !part.is_empty()
-                && part
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))),
-            "Invalid reference: {text}"
-        );
-        let base = Expression::Path(segments);
-        if suffix.is_empty() {
-            ensure!(!text.contains(['[', ']']), "Malformed lookup: {text}");
-            return Ok(base);
-        }
-        ensure!(suffix.ends_with(']'), "Unclosed lookup: {text}");
-        let inner = &suffix[..suffix.len() - 1];
-        let mut selectors = Vec::new();
-        let mut nesting = 0usize;
-        let mut start = 0;
-        for (index, ch) in inner.char_indices() {
-            match ch {
-                '[' => nesting += 1,
-                ']' => {
-                    ensure!(nesting > 0, "Unexpected closing bracket: {text}");
-                    nesting -= 1;
-                }
-                ',' if nesting == 0 => {
-                    selectors.push(parse(&inner[start..index], depth + 1)?);
-                    start = index + 1;
-                }
-                _ => {}
-            }
-        }
-        ensure!(nesting == 0, "Unclosed lookup: {text}");
-        selectors.push(parse(&inner[start..], depth + 1)?);
-        Ok(Expression::Lookup(Box::new(base), selectors))
-    }
     parse(text, 0)
 }
 
+fn parse(text: &str, depth: usize) -> Result<Expression> {
+    ensure!(depth < 64, "Reference nesting exceeds 64 levels");
+    let text = text.trim();
+    let split = text.find(['[', '(']);
+    let (path, suffix) = split.map_or((text, ""), |index| text.split_at(index));
+    let segments: Vec<String> = path.trim().split('.').map(str::to_owned).collect();
+    ensure!(
+        segments.iter().all(|part| !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'))),
+        "Invalid reference: {text}"
+    );
+    let base = Expression::Path(segments.clone());
+    if suffix.is_empty() {
+        return Ok(base);
+    }
+    let call = suffix.starts_with('(');
+    let closing = if call { ')' } else { ']' };
+    ensure!(suffix.ends_with(closing), "Unclosed reference: {text}");
+    let inner = &suffix[1..suffix.len() - 1];
+    let pieces = split_arguments(inner)?;
+    if call {
+        let mut arguments = Vec::new();
+        for piece in pieces {
+            let (name, value) = piece
+                .split_once('=')
+                .ok_or_else(|| anyhow::anyhow!("Expected named argument: {piece}"))?;
+            let name = name.trim();
+            let value = value.trim();
+            ensure!(valid_name(name), "Invalid argument name: {name}");
+            ensure!(
+                !arguments.iter().any(|(key, _)| key == name),
+                "Duplicate argument: {name}"
+            );
+            ensure!(!value.is_empty(), "Missing value for argument: {name}");
+            let value = if value.starts_with('"') {
+                CallArgument::Literal(serde_json::from_str::<String>(value)?)
+            } else if value.starts_with('\'') {
+                ensure!(
+                    value.len() >= 2 && value.ends_with('\''),
+                    "Unclosed argument string"
+                );
+                CallArgument::Literal(value[1..value.len() - 1].to_owned())
+            } else if value.contains(['{', '}']) {
+                names_at_depth(value, depth + 1)?;
+                CallArgument::Template(value.to_owned())
+            } else {
+                ensure!(
+                    !value.contains(['(', ')', '[', ']'])
+                        && !value.chars().any(char::is_whitespace),
+                    "Quote literal argument values containing spaces or delimiters"
+                );
+                CallArgument::Literal(value.to_owned())
+            };
+            arguments.push((name.to_owned(), value));
+        }
+        return Ok(Expression::Call(segments, arguments));
+    }
+    ensure!(!pieces.is_empty(), "Empty lookup: {text}");
+    let selectors = pieces
+        .into_iter()
+        .map(|piece| parse(piece, depth + 1))
+        .collect::<Result<_>>()?;
+    Ok(Expression::Lookup(Box::new(base), selectors))
+}
+
+/// Split delimiters only outside nested references and quoted literals.
+fn split_arguments(text: &str) -> Result<Vec<&str>> {
+    if text.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let mut pieces = vec![];
+    let mut start = 0;
+    let mut stack = vec![];
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' => stack.push(')'),
+            '[' => stack.push(']'),
+            '{' => stack.push('}'),
+            ')' | ']' | '}' => ensure!(
+                stack.pop() == Some(ch),
+                "Mismatched delimiter in reference: {text}"
+            ),
+            ',' if stack.is_empty() => {
+                pieces.push(text[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    ensure!(
+        stack.is_empty() && quote.is_none(),
+        "Unclosed delimiter in reference: {text}"
+    );
+    pieces.push(text[start..].trim());
+    Ok(pieces)
+}
+
+/// Byte index of the closing brace for a placeholder starting at byte zero.
+pub fn placeholder_end(text: &str) -> Result<usize> {
+    let mut depth = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    anyhow::bail!("Unclosed placeholder in resource")
+}
+
 pub fn names(template: &str) -> Result<Vec<String>> {
+    names_at_depth(template, 0)
+}
+
+fn names_at_depth(template: &str, depth: usize) -> Result<Vec<String>> {
     ensure!(!template.contains('\0'), "Values cannot contain NUL");
     let mut names = vec![];
     let mut rest = template;
@@ -69,13 +183,9 @@ pub fn names(template: &str) -> Result<Vec<String>> {
             rest.as_bytes()[start] == b'{',
             "Unmatched closing brace in resource"
         );
-        let end = rest[start + 1..]
-            .find('}')
-            .ok_or_else(|| anyhow::anyhow!("Unclosed placeholder in resource"))?
-            + start
-            + 1;
+        let end = placeholder_end(&rest[start..])? + start;
         let name = &rest[start + 1..end];
-        expression(name)?;
+        parse(name, depth)?;
         if !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
         }
@@ -97,7 +207,7 @@ pub fn validate_target(target: &str) -> Result<()> {
     let mut static_target = String::new();
     let mut rest = target;
     while let Some(start) = rest.find('{') {
-        let end = rest[start..].find('}').unwrap() + start;
+        let end = placeholder_end(&rest[start..])? + start;
         static_target.push_str(&rest[..start]);
         static_target.push_str("placeholder");
         rest = &rest[end + 1..];
@@ -115,7 +225,7 @@ pub fn validate_arguments(template: &str, args: Option<&[crate::script::Argument
             expr: &Expression,
             args: &[crate::script::Argument],
             names: &mut std::collections::BTreeSet<String>,
-        ) {
+        ) -> Result<()> {
             match expr {
                 Expression::Path(path) => {
                     if args.iter().any(|arg| arg.name == path[0]) {
@@ -123,20 +233,30 @@ pub fn validate_arguments(template: &str, args: Option<&[crate::script::Argument
                     }
                 }
                 Expression::Lookup(base, selectors) => {
-                    collect(base, args, names);
+                    collect(base, args, names)?;
                     for selector in selectors {
-                        collect(selector, args, names);
+                        collect(selector, args, names)?;
+                    }
+                }
+                Expression::Call(_, values) => {
+                    for (_, value) in values {
+                        if let CallArgument::Template(text) = value {
+                            for name in crate::template::names(text)? {
+                                collect(&expression(&name)?, args, names)?;
+                            }
+                        }
                     }
                 }
                 Expression::Key(_) => {}
             }
+            Ok(())
         }
         let mut names = std::collections::BTreeSet::new();
         for name in placeholders {
             if valid_name(&name) {
                 names.insert(name.clone());
             }
-            collect(&expression(&name)?, args, &mut names);
+            collect(&expression(&name)?, args, &mut names)?;
         }
         ensure!(
             args.len() == names.len() && args.iter().all(|arg| names.contains(&arg.name)),
@@ -178,10 +298,46 @@ mod tests {
             "{a[b,]}",
             "{a[b][c]}",
             "{a..b}",
-            "{a()}",
+            "{a(,)}",
         ] {
             assert!(names(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn calls_parse_literals_and_nested_argument_templates() {
+        assert_eq!(
+            expression(r#"example.templ(area=2, text="a,b={}\\\"", value={other(x={height})})"#)
+                .unwrap(),
+            Expression::Call(
+                vec!["example".into(), "templ".into()],
+                vec![
+                    ("area".into(), CallArgument::Literal("2".into())),
+                    ("text".into(), CallArgument::Literal("a,b={}\\\"".into())),
+                    (
+                        "value".into(),
+                        CallArgument::Template("{other(x={height})}".into())
+                    ),
+                ]
+            )
+        );
+        assert_eq!(
+            names("{a(x={b(y={z})})}/{a(x={b(y={z})})}").unwrap(),
+            ["a(x={b(y={z})})"]
+        );
+        for bad in [
+            "{a(x=)}",
+            "{a(x=1,x=2)}",
+            "{a(x=1,)}",
+            "{a(1)}",
+            "{a(x={b)}",
+            "{a(x=\"unclosed)}",
+            "{a(x={b},y=[)}",
+        ] {
+            assert!(names(bad).is_err(), "{bad}");
+        }
+        let deep = format!("{}x{}", "{a(x=".repeat(65), ")}".repeat(65));
+        assert!(names(&deep).unwrap_err().to_string().contains("nesting"));
     }
 
     #[test]
