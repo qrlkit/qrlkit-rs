@@ -483,6 +483,33 @@ url = "https://{domains[args.project, args.environment]}"
 
 Here `domains[args.project, args.environment]` resolves by first prompting for project (`docs` or `status`) and then use that to select either `[domains.docs]` or `[domains.status]`  and prompt for a environment (`staging` or `prod`). 
 
+### Templates
+
+Reuse templates with named arguments, including fields from a selected shape.
+
+```toml
+[shapes.square]
+width = "3"
+height = "3"
+
+[shapes.rectangle]
+width = "5"
+height = "8"
+
+[math]
+play = "https://www.wolframalpha.com/input?i={math.area(width={width}, height={height})}"
+area = "{width}*{height}"
+
+[geometry]
+args = [{ name = "shape", enum = { ref = "shapes" } }]
+url = "{math.play(width={shape.width}, height={shape.height})}"
+```
+
+```sh
+geometry rectangle   # Ask WolframAlpha for 5*8
+geometry             # Choose a shape
+```
+
 ### Hints and hidden groups
 
 Hide a group from pickers with `hidden = true`. Its values can still be referenced
