@@ -1,3 +1,6 @@
+### 0.15.1
+- Bump dependencies
+
 ## 0.15.0
 - Use templates
 
